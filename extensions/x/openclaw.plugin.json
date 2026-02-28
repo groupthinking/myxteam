@@ -1,0 +1,9 @@
+{
+  "id": "x",
+  "channels": ["x"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
