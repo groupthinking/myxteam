@@ -3,11 +3,17 @@
   "version": "0.1.0",
   "description": "OpenClaw X (Twitter) channel plugin for mention-driven agent interactions",
   "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
   "dependencies": {
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "openclaw": "workspace:*",
+    "vitest": "^3.0.0"
   },
   "openclaw": {
     "extensions": [

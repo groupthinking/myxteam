@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { xPlugin, setXRuntime } from "./src/channel.js";
+import { xPlugin } from "./src/channel.js";
+import { setXRuntime } from "./src/runtime.js";
 
 const plugin = {
   id: "x",
@@ -10,7 +11,8 @@ const plugin = {
 
   register(api: OpenClawPluginApi) {
     // Store the runtime reference so the channel can dispatch inbound messages
-    setXRuntime(api.runtime as Parameters<typeof setXRuntime>[0]);
+    // via runtime.channel.reply.handleInboundMessage()
+    setXRuntime(api.runtime);
 
     // Register the X channel with OpenClaw
     api.registerChannel({ plugin: xPlugin });

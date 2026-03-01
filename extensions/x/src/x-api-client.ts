@@ -5,20 +5,45 @@
  * OpenClaw X channel plugin. Handles user-context requests (posting, replying)
  * and app-context requests (usage monitoring).
  *
+ * Integrates with:
+ * - token-refresh.ts for automatic OAuth 2.0 token rotation
+ * - rate-limiter.ts for dual-layer (app + per-user) rate limiting
+ *
  * This client uses the native `fetch` API and does not depend on the official
- * xdk-typescript SDK, keeping the dependency footprint minimal. If the XDK
- * becomes available as a stable npm package, this client can be replaced.
+ * xdk-typescript SDK, keeping the dependency footprint minimal.
  */
 
 import type { ChannelLogSink } from "openclaw/plugin-sdk";
+import {
+  getValidAccessToken,
+  type TokenRefreshConfig,
+} from "./token-refresh.js";
+import {
+  consumePostRateLimit,
+  waitForPostRateLimit,
+} from "./rate-limiter.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface XApiClientConfig {
   /** OAuth 2.0 Access Token for user-context requests. */
   accessToken: string;
+  /** Account ID for rate limiting and token refresh. */
+  accountId?: string;
+  /** Token refresh configuration. If provided, tokens are auto-refreshed. */
+  tokenRefreshConfig?: TokenRefreshConfig;
   /** Optional logger. */
   log?: ChannelLogSink;
+  /**
+   * Whether to enforce rate limiting before post creation.
+   * Default: true.
+   */
+  rateLimitEnabled?: boolean;
+  /**
+   * Maximum time (ms) to wait for rate limit to clear before failing.
+   * Default: 60000 (1 minute).
+   */
+  rateLimitMaxWaitMs?: number;
 }
 
 export interface CreatePostParams {
@@ -34,6 +59,8 @@ export interface CreatePostResult {
   ok: boolean;
   postId?: string;
   error?: string;
+  /** Whether the request was rate-limited. */
+  rateLimited?: boolean;
 }
 
 export interface UserLookupResult {
@@ -69,21 +96,79 @@ const X_API_BASE = "https://api.x.com/2";
 
 export class XApiClient {
   private accessToken: string;
+  private accountId: string;
+  private tokenRefreshConfig?: TokenRefreshConfig;
   private log?: ChannelLogSink;
+  private rateLimitEnabled: boolean;
+  private rateLimitMaxWaitMs: number;
 
   constructor(config: XApiClientConfig) {
     this.accessToken = config.accessToken;
+    this.accountId = config.accountId ?? "default";
+    this.tokenRefreshConfig = config.tokenRefreshConfig;
     this.log = config.log;
+    this.rateLimitEnabled = config.rateLimitEnabled ?? true;
+    this.rateLimitMaxWaitMs = config.rateLimitMaxWaitMs ?? 60_000;
+  }
+
+  /**
+   * Get a valid access token, refreshing if necessary.
+   * If token refresh is not configured, returns the static token.
+   */
+  private async resolveAccessToken(): Promise<string> {
+    if (this.tokenRefreshConfig) {
+      const token = await getValidAccessToken(
+        this.accountId,
+        this.tokenRefreshConfig,
+        this.log,
+      );
+      this.accessToken = token;
+      return token;
+    }
+    return this.accessToken;
   }
 
   /**
    * Create a new post or reply.
    *
+   * Enforces rate limiting (both app-level and per-user) before sending.
+   * If rate-limited, waits up to `rateLimitMaxWaitMs` for a slot to open.
+   *
    * Note: As of Feb 23, 2026, replies are only permitted when the replying
-   * account was @mentioned or quoted by the original author. Attempting to
-   * reply to an unsolicited post will result in an API error.
+   * account was @mentioned or quoted by the original author.
    */
   async createPost(params: CreatePostParams): Promise<CreatePostResult> {
+    // ── Rate Limiting ──────────────────────────────────────────────────────
+    if (this.rateLimitEnabled) {
+      const allowed = await waitForPostRateLimit(
+        this.accountId,
+        this.log,
+        this.rateLimitMaxWaitMs,
+      );
+
+      if (!allowed) {
+        this.log?.warn?.(
+          `[${this.accountId}] Post creation rate-limited. Max wait exceeded.`,
+        );
+        return {
+          ok: false,
+          error: "Rate limit exceeded. Try again later.",
+          rateLimited: true,
+        };
+      }
+
+      // Consume a slot from both app and user limiters
+      const result = consumePostRateLimit(this.accountId, this.log);
+      if (!result.allowed) {
+        return {
+          ok: false,
+          error: `Rate limit reached (${result.currentUsage}/${result.limit}).`,
+          rateLimited: true,
+        };
+      }
+    }
+
+    // ── Build Request ──────────────────────────────────────────────────────
     const body: Record<string, unknown> = { text: params.text };
 
     if (params.inReplyToPostId) {
@@ -106,6 +191,12 @@ export class XApiClient {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.log?.error?.(`Failed to create post: ${msg}`);
+
+      // Detect X API rate limit response (HTTP 429)
+      if (msg.includes("429")) {
+        return { ok: false, error: msg, rateLimited: true };
+      }
+
       return { ok: false, error: msg };
     }
   }
@@ -216,10 +307,13 @@ export class XApiClient {
     path: string,
     body?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
+    // Resolve a valid access token (auto-refresh if configured)
+    const token = await this.resolveAccessToken();
+
     const url = path.startsWith("http") ? path : `${X_API_BASE}${path}`;
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.accessToken}`,
+      Authorization: `Bearer ${token}`,
     };
 
     const options: RequestInit = { method, headers };

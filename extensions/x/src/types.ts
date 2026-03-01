@@ -27,6 +27,12 @@ export interface ResolvedXAccount {
   /** OAuth 2.0 Refresh Token for obtaining new access tokens. */
   refreshToken?: string;
 
+  /** OAuth 2.0 Client ID (from app-level config, shared across accounts). */
+  clientId?: string;
+
+  /** OAuth 2.0 Client Secret (from app-level config, shared across accounts). */
+  clientSecret?: string;
+
   /** The X user ID, resolved from username if not provided. */
   userId?: string;
 
@@ -80,6 +86,9 @@ export function resolveXAccount(opts: {
   const accessToken = accountCfg?.accessToken ?? "";
   const configured = Boolean(agentUsername.trim() && accessToken.trim());
 
+  // Client credentials are app-level (shared across all accounts)
+  const { clientId, clientSecret } = resolveClientCredentials(opts.cfg);
+
   return {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
@@ -88,6 +97,8 @@ export function resolveXAccount(opts: {
     agentUsername,
     accessToken,
     refreshToken: accountCfg?.refreshToken,
+    clientId,
+    clientSecret,
     userId: accountCfg?.userId,
     config: accountCfg ?? { agentUsername: "" },
   };

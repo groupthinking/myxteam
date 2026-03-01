@@ -11,11 +11,7 @@
  * - Outbound replies via POST /2/tweets with reply context.
  */
 
-import type {
-  ChannelPlugin,
-  ChannelAccountSnapshot,
-  ChannelLogSink,
-} from "openclaw/plugin-sdk";
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 
 import { XChannelConfigSchema } from "./config-schema.js";
 import {
@@ -34,17 +30,25 @@ import {
   type StreamPost,
 } from "./stream-handler.js";
 import { XApiClient } from "./x-api-client.js";
+import { getXRuntime } from "./runtime.js";
+import {
+  initTokens,
+  clearTokens,
+  clearAllTokens,
+  type TokenRefreshConfig,
+} from "./token-refresh.js";
+import {
+  initRateLimiter,
+  resetRateLimiters,
+} from "./rate-limiter.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
 
 /** Track whether the shared stream is running. */
 let streamRunning = false;
 
-/** Store the runtime reference for dispatching inbound messages. */
-let pluginRuntime: {
-  channel: { reply: Record<string, unknown> };
-  config: { loadConfig: () => Record<string, unknown> };
-} | null = null;
+/** Track active account IDs so we know when to stop the shared stream. */
+const activeAccountIds = new Set<string>();
 
 // ─── Plugin Definition ───────────────────────────────────────────────────────
 
@@ -62,10 +66,10 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   },
 
   capabilities: {
-    chatTypes: ["direct", "thread"],
+    chatTypes: ["thread"],
     reply: true,
     edit: true,
-    media: false, // Media support can be added later
+    media: false,
   },
 
   reload: { configPrefixes: ["channels.x"] },
@@ -101,7 +105,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
 
   security: {
     resolveDmPolicy: () => ({
-      policy: "open",
+      policy: "open" as const,
       allowFrom: [],
       policyPath: "channels.x.dmPolicy",
       allowFromPath: "channels.x.allowFrom",
@@ -117,10 +121,11 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
      *
      * The Filtered Stream is shared across all accounts (it uses the app-level
      * Bearer Token). The first account to start will initiate the stream.
-     * Subsequent accounts just register themselves as active.
+     * Subsequent accounts register themselves as active without starting
+     * a second stream.
      */
     startAccount: async (ctx) => {
-      const { account, cfg, log, setStatus } = ctx;
+      const { account, cfg, log, setStatus, abortSignal } = ctx;
 
       if (!account.configured || !account.enabled) {
         log?.info?.(`[${account.accountId}] Skipping — not configured or not enabled.`);
@@ -128,8 +133,43 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       }
 
       log?.info?.(`[${account.accountId}] Starting X channel for @${account.agentUsername}...`);
+      activeAccountIds.add(account.accountId);
 
-      // Only start the shared stream once
+      // Initialize rate limiter on first account start
+      if (activeAccountIds.size === 1) {
+        initRateLimiter({
+          appPostsPerWindow: 300,
+          userPostsPerWindow: 200,
+          windowMs: 15 * 60 * 1000,
+        });
+        log?.info?.("Rate limiter initialized.");
+      }
+
+      // Initialize token refresh if refresh token and client credentials are available
+      if (account.refreshToken && account.clientId) {
+        const tokenConfig: TokenRefreshConfig = {
+          clientId: account.clientId,
+          clientSecret: account.clientSecret,
+        };
+        initTokens(
+          account.accountId,
+          account.accessToken,
+          account.refreshToken,
+          tokenConfig,
+          {
+            log,
+            onRefreshed: async (acctId, tokens) => {
+              log?.info?.(
+                `[${acctId}] Tokens refreshed. New expiry: ${new Date(tokens.expiresAt).toISOString()}.`,
+              );
+              // TODO: Persist refreshed tokens to config file via runtime.config.writeConfigFile()
+            },
+          },
+        );
+        log?.info?.(`[${account.accountId}] OAuth token refresh scheduled.`);
+      }
+
+      // Only start the shared stream once (first account wins)
       if (!streamRunning) {
         const bearerToken = resolveAppBearerToken(cfg);
         if (!bearerToken) {
@@ -143,22 +183,36 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
           return;
         }
 
-        log?.info?.(`Starting Filtered Stream for ${agentUsernames.length} agent(s): ${agentUsernames.map((u) => `@${u}`).join(", ")}`);
+        log?.info?.(
+          `Starting Filtered Stream for ${agentUsernames.length} agent(s): ${agentUsernames.map((u) => `@${u}`).join(", ")}`,
+        );
+
+        streamRunning = true;
 
         await startFilteredStream({
           bearerToken,
           agentUsernames,
           log,
-          abortSignal: ctx.abortSignal,
+          abortSignal,
           onMention: async (post: StreamPost) => {
             await handleIncomingMention(post, cfg, log);
           },
           onStatusChange: (status) => {
             log?.info?.(`Filtered Stream status: ${status}`);
+            // Update all active accounts' snapshots
+            for (const activeId of activeAccountIds) {
+              const activeAccount = resolveXAccount({ cfg, accountId: activeId });
+              setStatus({
+                accountId: activeId,
+                name: activeAccount.name,
+                enabled: true,
+                configured: true,
+                running: true,
+                connected: status === "connected",
+              });
+            }
           },
         });
-
-        streamRunning = true;
       }
 
       setStatus({
@@ -168,22 +222,31 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         configured: true,
         running: true,
         connected: getStreamStatus() === "connected",
-      } satisfies ChannelAccountSnapshot);
+      });
 
       log?.info?.(`[${account.accountId}] X channel started for @${account.agentUsername}.`);
     },
 
     stopAccount: async (ctx) => {
-      ctx.log?.info?.(`[${ctx.accountId}] Stopping X channel...`);
+      const { accountId, log } = ctx;
+      log?.info?.(`[${accountId}] Stopping X channel...`);
 
-      // Only stop the stream if this is the last account
-      // For now, we stop on any account stop (can be refined later)
-      if (streamRunning) {
+      activeAccountIds.delete(accountId);
+
+      // Clear token refresh for this account
+      clearTokens(accountId);
+
+      // Only stop the shared stream when the last account is removed
+      if (activeAccountIds.size === 0 && streamRunning) {
+        log?.info?.("Last active account removed. Stopping Filtered Stream.");
         stopFilteredStream();
         streamRunning = false;
+        clearAllTokens();
+        resetRateLimiters();
+        log?.info?.("All token refresh timers and rate limiters cleared.");
       }
 
-      ctx.log?.info?.(`[${ctx.accountId}] X channel stopped.`);
+      log?.info?.(`[${accountId}] X channel stopped.`);
     },
   },
 
@@ -193,6 +256,12 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
     deliveryMode: "direct",
 
     /**
+     * X posts have a 280-character limit for most accounts.
+     * The chunker splits long responses into multiple posts.
+     */
+    textChunkLimit: 280,
+
+    /**
      * Send a text reply to a post on X.
      *
      * Uses the agent's own OAuth token (user-context) to post as that agent.
@@ -200,15 +269,23 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
      * contains the specific post ID being replied to.
      */
     sendText: async (ctx) => {
-      const { text, replyToId, accountId } = ctx;
+      const { text, replyToId, accountId, to } = ctx;
       const account = resolveXAccount({ cfg: ctx.cfg, accountId });
 
       if (!account.configured) {
-        return { ok: false, error: `X account ${accountId} is not configured.` };
+        throw new Error(`X account ${accountId ?? "default"} is not configured.`);
       }
+
+      // Build token refresh config if credentials are available
+      const tokenRefreshConfig = account.clientId
+        ? { clientId: account.clientId, clientSecret: account.clientSecret }
+        : undefined;
 
       const client = new XApiClient({
         accessToken: account.accessToken,
+        accountId: account.accountId,
+        tokenRefreshConfig,
+        rateLimitEnabled: true,
       });
 
       const result = await client.createPost({
@@ -216,21 +293,28 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         inReplyToPostId: replyToId ?? undefined,
       });
 
-      if (result.ok) {
-        return { ok: true, deliveryId: result.postId };
+      if (!result.ok) {
+        throw new Error(result.error ?? "Failed to create X post");
       }
 
-      return { ok: false, error: new Error(result.error ?? "Unknown error") };
+      return {
+        channel: "x" as const,
+        messageId: result.postId ?? "",
+        chatId: to,
+      };
     },
   },
 
   // ─── Mentions Adapter ────────────────────────────────────────────────────
 
   mentions: {
-    stripPatterns: ({ text }) => {
-      // Remove @agent mentions from the beginning of the text
-      // so the agent sees the clean command/question.
-      return text.replace(/^(@\w+\s*)+/, "").trim();
+    /**
+     * Return patterns to strip from the beginning of mention text.
+     * This removes @agent mentions so the agent sees the clean command/question.
+     */
+    stripPatterns: () => {
+      // Match @username patterns at the start of the message
+      return ["^(@\\w+\\s*)+"];
     },
   },
 
@@ -247,14 +331,18 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
  * Handle an incoming mention from the Filtered Stream.
  *
  * Routes the mention to the correct agent based on the matching rules,
- * then dispatches it into OpenClaw's inbound message pipeline.
+ * then dispatches it into OpenClaw's inbound message pipeline via the
+ * runtime.channel.reply.handleInboundMessage() method.
+ *
+ * This follows the exact same pattern as the nostr plugin's onMessage callback.
  */
 async function handleIncomingMention(
   post: StreamPost,
-  cfg: Record<string, unknown>,
-  log?: ChannelLogSink,
+  cfg: OpenClawConfig,
+  log?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; debug?: (...args: unknown[]) => void },
 ): Promise<void> {
-  // Determine which agent(s) were mentioned based on matching rules
+  const runtime = getXRuntime();
+
   for (const rule of post.matchingRules) {
     // Rule tags are formatted as "agent:<username>"
     const match = rule.tag.match(/^agent:(.+)$/);
@@ -278,43 +366,36 @@ async function handleIncomingMention(
     );
 
     // Dispatch to OpenClaw's message pipeline.
-    // The runtime.channel.reply.handleInboundMessage function is the standard
-    // entry point for all channel plugins to inject messages.
-    //
-    // TODO: Wire this up to the actual runtime once the plugin is registered.
-    // For now, we log the intent. The integration point follows the same
-    // pattern as the nostr plugin's onMessage callback.
-    //
-    // await runtime.channel.reply.handleInboundMessage({
-    //   channel: "x",
-    //   accountId: account.accountId,
-    //   senderId: post.authorId,
-    //   senderUsername: post.authorUsername,
-    //   chatType: "thread",
-    //   chatId: post.conversationId ?? post.id,
-    //   text: post.text,
-    //   replyToId: post.id,
-    //   reply: async (responseText: string) => {
-    //     const client = new XApiClient({ accessToken: account.accessToken });
-    //     await client.createPost({ text: responseText, inReplyToPostId: post.id });
-    //   },
-    // });
+    // This follows the exact same pattern as the nostr plugin.
+    try {
+      await (
+        runtime.channel.reply as {
+          handleInboundMessage?: (params: unknown) => Promise<void>;
+        }
+      ).handleInboundMessage?.({
+        channel: "x",
+        accountId: account.accountId,
+        senderId: post.authorId,
+        senderUsername: post.authorUsername,
+        chatType: "thread",
+        chatId: post.conversationId ?? post.id,
+        text: post.text,
+        replyToId: post.id,
+        reply: async (responseText: string) => {
+          const client = new XApiClient({
+            accessToken: account.accessToken,
+          });
+          await client.createPost({
+            text: responseText,
+            inReplyToPostId: post.id,
+          });
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log?.error?.(
+        `[${account.accountId}] Failed to dispatch inbound mention: ${msg}`,
+      );
+    }
   }
-}
-
-// ─── Runtime Registration ────────────────────────────────────────────────────
-
-/**
- * Set the plugin runtime reference.
- * Called by the plugin entrypoint during registration.
- */
-export function setXRuntime(runtime: typeof pluginRuntime): void {
-  pluginRuntime = runtime;
-}
-
-/**
- * Get the plugin runtime reference.
- */
-export function getXRuntime(): typeof pluginRuntime {
-  return pluginRuntime;
 }

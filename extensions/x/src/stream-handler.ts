@@ -397,9 +397,36 @@ async function processStream(
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
 /**
- * Parse a raw stream JSON object into a StreamPost.
- * Returns null if the data is not a valid post (e.g., system messages).
+ * Build the desired stream rules from a list of agent usernames.
+ * Exported for testing.
  */
+export function buildStreamRules(
+  agentUsernames: string[],
+): Array<{ value: string; tag: string }> {
+  return agentUsernames.map((username) => ({
+    value: `@${username}`,
+    tag: `agent:${username}`,
+  }));
+}
+
+/**
+ * Parse a single line from the Filtered Stream.
+ * Returns a StreamPost if the line contains valid post data, or null
+ * for heartbeat/empty/malformed lines.
+ * Exported for testing.
+ */
+export function parseStreamLine(line: string): StreamPost | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parseStreamPost(parsed);
+  } catch {
+    return null;
+  }
+}
+
 function parseStreamPost(raw: unknown): StreamPost | null {
   if (!raw || typeof raw !== "object") return null;
 
