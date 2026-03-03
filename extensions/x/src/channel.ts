@@ -41,6 +41,18 @@ import {
   initRateLimiter,
   resetRateLimiters,
 } from "./rate-limiter.js";
+import {
+  initCreditBudget,
+  clearCreditBudget,
+  checkCreditBudget,
+  getCreditUsageSnapshot,
+} from "./credit-budget.js";
+import { resolveCreditBudget } from "./types.js";
+import {
+  resolveReplyToIdForChunk,
+  recordPostedChunk,
+  clearAllThreadState,
+} from "./thread-state.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
 
@@ -135,7 +147,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       log?.info?.(`[${account.accountId}] Starting X channel for @${account.agentUsername}...`);
       activeAccountIds.add(account.accountId);
 
-      // Initialize rate limiter on first account start
+      // Initialize rate limiter and credit budget on first account start
       if (activeAccountIds.size === 1) {
         initRateLimiter({
           appPostsPerWindow: 300,
@@ -143,6 +155,28 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
           windowMs: 15 * 60 * 1000,
         });
         log?.info?.("Rate limiter initialized.");
+
+        // Initialize credit budget monitoring if a budget is configured
+        const creditBudget = resolveCreditBudget(cfg);
+        const bearerToken = resolveAppBearerToken(cfg);
+        if (creditBudget && creditBudget > 0 && bearerToken) {
+          await initCreditBudget({
+            budget: creditBudget,
+            bearerToken,
+            log,
+            usageCheckIntervalMinutes: undefined, // uses default 60 min
+            onBudgetExceeded: async (usage, budget) => {
+              log?.error?.(
+                `BUDGET EXCEEDED: ${usage}/${budget} credits. All X API posts are now blocked.`,
+              );
+            },
+            onBudgetWarning: async (usage, budget) => {
+              log?.warn?.(
+                `BUDGET WARNING: ${usage}/${budget} credits used (${Math.round((usage / budget) * 100)}%).`,
+              );
+            },
+          });
+        }
       }
 
       // Initialize token refresh if refresh token and client credentials are available
@@ -160,9 +194,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
             log,
             onRefreshed: async (acctId, tokens) => {
               log?.info?.(
-                `[${acctId}] Tokens refreshed. New expiry: ${new Date(tokens.expiresAt).toISOString()}.`,
+                `[${acctId}] Tokens refreshed. New expiry: ${new Date(tokens.expiresAt).toISOString()}. Persisting to config.`,
               );
-              // TODO: Persist refreshed tokens to config file via runtime.config.writeConfigFile()
+              await persistRefreshedTokens(acctId, tokens.accessToken, tokens.refreshToken, log);
             },
           },
         );
@@ -243,7 +277,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         streamRunning = false;
         clearAllTokens();
         resetRateLimiters();
-        log?.info?.("All token refresh timers and rate limiters cleared.");
+        clearCreditBudget();
+        clearAllThreadState();
+        log?.info?.("All token refresh timers, rate limiters, credit budget, and thread state cleared.");
       }
 
       log?.info?.(`[${accountId}] X channel stopped.`);
@@ -276,6 +312,26 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         throw new Error(`X account ${accountId ?? "default"} is not configured.`);
       }
 
+      // Check credit budget before posting
+      const budgetCheck = checkCreditBudget();
+      if (!budgetCheck.allowed) {
+        throw new Error(
+          `X API credit budget exceeded. ${budgetCheck.reason ?? ""} ` +
+          `Increase the budget in channels.x.creditBudget or wait for the monthly reset.`,
+        );
+      }
+
+      // Resolve the correct post to reply to for this chunk.
+      //
+      // OpenClaw passes the same original replyToId to every chunk, but X
+      // requires each chunk to reply to the PREVIOUS chunk to form a thread.
+      // We maintain a per-conversation "last post ID" map in thread-state.ts.
+      //
+      // Logic:
+      //   - If a previous chunk was posted in this conversation → reply to that chunk.
+      //   - Otherwise → reply to the original mention (replyToId from OpenClaw).
+      const effectiveReplyToId = resolveReplyToIdForChunk(to, replyToId);
+
       // Build token refresh config if credentials are available
       const tokenRefreshConfig = account.clientId
         ? { clientId: account.clientId, clientSecret: account.clientSecret }
@@ -290,16 +346,24 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
 
       const result = await client.createPost({
         text,
-        inReplyToPostId: replyToId ?? undefined,
+        inReplyToPostId: effectiveReplyToId,
       });
 
       if (!result.ok) {
         throw new Error(result.error ?? "Failed to create X post");
       }
 
+      const postedId = result.postId ?? "";
+
+      // Record this chunk so the next chunk in the same conversation
+      // will reply to it, forming a proper X thread.
+      if (postedId) {
+        recordPostedChunk(to, postedId);
+      }
+
       return {
         channel: "x" as const,
-        messageId: result.postId ?? "",
+        messageId: postedId,
         chatId: to,
       };
     },
@@ -324,6 +388,64 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
     resolveReplyToMode: () => "all",
   },
 };
+
+// ─── Token Persistence ──────────────────────────────────────────────────────
+
+/**
+ * Persist refreshed OAuth tokens back to the config file.
+ *
+ * Pattern: load current config → deep-clone → update the specific account's
+ * tokens → write back. This ensures the refreshed tokens survive a restart.
+ *
+ * If the runtime is not available (e.g., during tests), this is a no-op.
+ */
+async function persistRefreshedTokens(
+  accountId: string,
+  accessToken: string,
+  refreshToken: string,
+  log?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void },
+): Promise<void> {
+  const runtime = getXRuntime();
+
+  if (!runtime?.config?.loadConfig || !runtime?.config?.writeConfigFile) {
+    log?.warn?.(`[${accountId}] Runtime config API not available. Skipping token persistence.`);
+    return;
+  }
+
+  try {
+    // Load the current live config
+    const currentCfg = runtime.config.loadConfig() as Record<string, unknown>;
+
+    // Deep-clone to avoid mutating the live config object
+    const nextCfg = structuredClone(currentCfg) as Record<string, unknown>;
+
+    // Navigate to channels.x.accounts.<accountId>
+    const channels = nextCfg.channels as Record<string, unknown> | undefined;
+    const xChannel = channels?.x as Record<string, unknown> | undefined;
+    const accounts = xChannel?.accounts as Record<string, unknown> | undefined;
+    const accountEntry = accounts?.[accountId] as Record<string, unknown> | undefined;
+
+    if (!accountEntry) {
+      log?.warn?.(
+        `[${accountId}] Account not found in config. Cannot persist refreshed tokens.`,
+      );
+      return;
+    }
+
+    // Update the tokens in-place
+    accountEntry.accessToken = accessToken;
+    accountEntry.refreshToken = refreshToken;
+
+    // Write the updated config back to disk
+    await runtime.config.writeConfigFile(nextCfg as Parameters<typeof runtime.config.writeConfigFile>[0]);
+
+    log?.info?.(`[${accountId}] Refreshed tokens persisted to config file.`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.error?.(`[${accountId}] Failed to persist refreshed tokens: ${msg}`);
+    // Non-fatal — tokens are still valid in memory for this session
+  }
+}
 
 // ─── Inbound Message Handler ─────────────────────────────────────────────────
 
