@@ -332,17 +332,38 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       //   - Otherwise → reply to the original mention (replyToId from OpenClaw).
       const effectiveReplyToId = resolveReplyToIdForChunk(to, replyToId);
 
-      // Build token refresh config if credentials are available
-      const tokenRefreshConfig = account.clientId
+      // Build the API client with the correct auth mode for this account
+      const isOAuth1 = account.authMode === "oauth1" &&
+        account.oauth1AccessToken &&
+        account.oauth1AccessTokenSecret &&
+        account.oauth1ConsumerKey &&
+        account.oauth1ConsumerSecret;
+
+      const tokenRefreshConfig = !isOAuth1 && account.clientId
         ? { clientId: account.clientId, clientSecret: account.clientSecret }
         : undefined;
 
-      const client = new XApiClient({
-        accessToken: account.accessToken,
-        accountId: account.accountId,
-        tokenRefreshConfig,
-        rateLimitEnabled: true,
-      });
+      const client = new XApiClient(
+        isOAuth1
+          ? {
+              authMode: "oauth1",
+              oauth1Credentials: {
+                consumerKey: account.oauth1ConsumerKey!,
+                consumerSecret: account.oauth1ConsumerSecret!,
+                accessToken: account.oauth1AccessToken!,
+                accessTokenSecret: account.oauth1AccessTokenSecret!,
+              },
+              accountId: account.accountId,
+              rateLimitEnabled: true,
+            }
+          : {
+              authMode: "oauth2",
+              accessToken: account.accessToken,
+              accountId: account.accountId,
+              tokenRefreshConfig,
+              rateLimitEnabled: true,
+            },
+      );
 
       const result = await client.createPost({
         text,

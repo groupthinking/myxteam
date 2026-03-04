@@ -22,15 +22,32 @@ import {
   consumePostRateLimit,
   waitForPostRateLimit,
 } from "./rate-limiter.js";
+import {
+  buildOAuth1HeaderAsync,
+  type OAuth1Credentials,
+} from "./oauth1.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface XApiClientConfig {
-  /** OAuth 2.0 Access Token for user-context requests. */
-  accessToken: string;
+  /**
+   * OAuth 2.0 Access Token for user-context requests.
+   * Required when authMode is 'oauth2' (default).
+   */
+  accessToken?: string;
+  /**
+   * OAuth 1.0a credentials for user-context requests.
+   * Required when authMode is 'oauth1'.
+   */
+  oauth1Credentials?: OAuth1Credentials;
+  /**
+   * Authentication mode. Defaults to 'oauth2'.
+   * Use 'oauth1' when the app has OAuth 1.0a credentials (Consumer Key/Secret).
+   */
+  authMode?: "oauth1" | "oauth2";
   /** Account ID for rate limiting and token refresh. */
   accountId?: string;
-  /** Token refresh configuration. If provided, tokens are auto-refreshed. */
+  /** Token refresh configuration. If provided, OAuth 2.0 tokens are auto-refreshed. */
   tokenRefreshConfig?: TokenRefreshConfig;
   /** Optional logger. */
   log?: ChannelLogSink;
@@ -96,6 +113,8 @@ const X_API_BASE = "https://api.x.com/2";
 
 export class XApiClient {
   private accessToken: string;
+  private authMode: "oauth1" | "oauth2";
+  private oauth1Credentials?: OAuth1Credentials;
   private accountId: string;
   private tokenRefreshConfig?: TokenRefreshConfig;
   private log?: ChannelLogSink;
@@ -103,7 +122,9 @@ export class XApiClient {
   private rateLimitMaxWaitMs: number;
 
   constructor(config: XApiClientConfig) {
-    this.accessToken = config.accessToken;
+    this.accessToken = config.accessToken ?? "";
+    this.authMode = config.authMode ?? (config.oauth1Credentials ? "oauth1" : "oauth2");
+    this.oauth1Credentials = config.oauth1Credentials;
     this.accountId = config.accountId ?? "default";
     this.tokenRefreshConfig = config.tokenRefreshConfig;
     this.log = config.log;
@@ -112,7 +133,7 @@ export class XApiClient {
   }
 
   /**
-   * Get a valid access token, refreshing if necessary.
+   * Get a valid OAuth 2.0 access token, refreshing if necessary.
    * If token refresh is not configured, returns the static token.
    */
   private async resolveAccessToken(): Promise<string> {
@@ -307,14 +328,18 @@ export class XApiClient {
     path: string,
     body?: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    // Resolve a valid access token (auto-refresh if configured)
-    const token = await this.resolveAccessToken();
-
     const url = path.startsWith("http") ? path : `${X_API_BASE}${path}`;
+    const headers: Record<string, string> = {};
 
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-    };
+    if (this.authMode === "oauth1" && this.oauth1Credentials) {
+      // OAuth 1.0a: sign each request with HMAC-SHA1
+      // For JSON bodies, we sign only the OAuth params (not the body)
+      headers["Authorization"] = await buildOAuth1HeaderAsync(method, url, this.oauth1Credentials);
+    } else {
+      // OAuth 2.0: Bearer Token (auto-refresh if configured)
+      const token = await this.resolveAccessToken();
+      headers["Authorization"] = `Bearer ${token}`;
+    }
 
     const options: RequestInit = { method, headers };
 

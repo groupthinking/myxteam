@@ -33,6 +33,21 @@ export interface ResolvedXAccount {
   /** OAuth 2.0 Client Secret (from app-level config, shared across accounts). */
   clientSecret?: string;
 
+  /** OAuth 1.0a Access Token (per-account). */
+  oauth1AccessToken?: string;
+
+  /** OAuth 1.0a Access Token Secret (per-account). */
+  oauth1AccessTokenSecret?: string;
+
+  /** OAuth 1.0a Consumer Key (app-level, shared across accounts). */
+  oauth1ConsumerKey?: string;
+
+  /** OAuth 1.0a Consumer Secret (app-level, shared across accounts). */
+  oauth1ConsumerSecret?: string;
+
+  /** Whether this account uses OAuth 1.0a (true) or OAuth 2.0 (false). */
+  authMode: "oauth1" | "oauth2";
+
   /** The X user ID, resolved from username if not provided. */
   userId?: string;
 
@@ -84,10 +99,22 @@ export function resolveXAccount(opts: {
 
   const agentUsername = accountCfg?.agentUsername ?? "";
   const accessToken = accountCfg?.accessToken ?? "";
-  const configured = Boolean(agentUsername.trim() && accessToken.trim());
+  const oauth1AccessToken = accountCfg?.oauth1AccessToken ?? "";
+  const oauth1AccessTokenSecret = accountCfg?.oauth1AccessTokenSecret ?? "";
+
+  // Determine auth mode: OAuth 1.0a if oauth1 tokens are present, else OAuth 2.0
+  const hasOAuth1 = Boolean(oauth1AccessToken.trim() && oauth1AccessTokenSecret.trim());
+  const authMode: "oauth1" | "oauth2" = hasOAuth1 ? "oauth1" : "oauth2";
+
+  // An account is configured if it has a username + at least one auth method
+  const configured = Boolean(
+    agentUsername.trim() &&
+    (accessToken.trim() || hasOAuth1),
+  );
 
   // Client credentials are app-level (shared across all accounts)
   const { clientId, clientSecret } = resolveClientCredentials(opts.cfg);
+  const { oauth1ConsumerKey, oauth1ConsumerSecret } = resolveOAuth1AppCredentials(opts.cfg);
 
   return {
     accountId,
@@ -99,6 +126,11 @@ export function resolveXAccount(opts: {
     refreshToken: accountCfg?.refreshToken,
     clientId,
     clientSecret,
+    oauth1AccessToken: oauth1AccessToken || undefined,
+    oauth1AccessTokenSecret: oauth1AccessTokenSecret || undefined,
+    oauth1ConsumerKey,
+    oauth1ConsumerSecret,
+    authMode,
     userId: accountCfg?.userId,
     config: accountCfg ?? { agentUsername: "" },
   };
@@ -124,6 +156,21 @@ export function resolveClientCredentials(cfg: OpenClawConfig): {
   return {
     clientId: xCfg?.clientId?.trim() || undefined,
     clientSecret: xCfg?.clientSecret?.trim() || undefined,
+  };
+}
+
+/**
+ * Resolve the OAuth 1.0a app-level credentials (Consumer Key + Secret).
+ * These are shared across all accounts and used to sign OAuth 1.0a requests.
+ */
+export function resolveOAuth1AppCredentials(cfg: OpenClawConfig): {
+  oauth1ConsumerKey?: string;
+  oauth1ConsumerSecret?: string;
+} {
+  const xCfg = getXChannelConfig(cfg);
+  return {
+    oauth1ConsumerKey: xCfg?.oauth1ConsumerKey?.trim() || undefined,
+    oauth1ConsumerSecret: xCfg?.oauth1ConsumerSecret?.trim() || undefined,
   };
 }
 

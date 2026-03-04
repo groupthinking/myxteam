@@ -17,6 +17,7 @@ export const XAccountCredentialsSchema = z.object({
   /**
    * OAuth 2.0 Access Token for user-context requests (posting, replying).
    * Obtained via the OAuth 2.0 Authorization Code Flow with PKCE.
+   * Mutually exclusive with oauth1AccessToken — use one or the other.
    */
   accessToken: z.string().optional(),
 
@@ -25,6 +26,19 @@ export const XAccountCredentialsSchema = z.object({
    * Only available when the `offline.access` scope was requested.
    */
   refreshToken: z.string().optional(),
+
+  /**
+   * OAuth 1.0a Access Token for user-context requests.
+   * Use this when the app is configured with OAuth 1.0a (Consumer Key/Secret).
+   * The corresponding secret must be provided in oauth1AccessTokenSecret.
+   */
+  oauth1AccessToken: z.string().optional(),
+
+  /**
+   * OAuth 1.0a Access Token Secret.
+   * Required when oauth1AccessToken is set.
+   */
+  oauth1AccessTokenSecret: z.string().optional(),
 
   /**
    * The X user ID associated with this agent account.
@@ -63,6 +77,19 @@ export const XChannelConfigSchema = z.object({
    * Required for confidential client token refresh flows.
    */
   clientSecret: z.string().optional().describe("OAuth 2.0 Client Secret."),
+
+  /**
+   * OAuth 1.0a Consumer Key (also called API Key) for the registered X app.
+   * Required when using OAuth 1.0a authentication for posting.
+   * Found in the X Developer Portal under "Keys and Tokens".
+   */
+  oauth1ConsumerKey: z.string().optional().describe("OAuth 1.0a Consumer Key (API Key)."),
+
+  /**
+   * OAuth 1.0a Consumer Secret (also called API Secret) for the registered X app.
+   * Required when using OAuth 1.0a authentication for posting.
+   */
+  oauth1ConsumerSecret: z.string().optional().describe("OAuth 1.0a Consumer Secret (API Secret)."),
 
   /**
    * Monthly credit budget (in dollars or credits) to prevent over-spending.
