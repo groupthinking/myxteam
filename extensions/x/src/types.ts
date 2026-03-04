@@ -72,8 +72,7 @@ export function listXAccountIds(cfg: OpenClawConfig): string[] {
   const xCfg = getXChannelConfig(cfg);
   if (!xCfg?.accounts) return [];
 
-  const ids = Object.keys(xCfg.accounts);
-  return ids.length > 0 ? ids : [];
+  return Object.keys(xCfg.accounts);
 }
 
 /**

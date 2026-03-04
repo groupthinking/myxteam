@@ -80,7 +80,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
   capabilities: {
     chatTypes: ["thread"],
     reply: true,
-    edit: true,
+    edit: false, // X API v2 does not expose a post-editing endpoint
     media: false,
   },
 
@@ -160,11 +160,14 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         const creditBudget = resolveCreditBudget(cfg);
         const bearerToken = resolveAppBearerToken(cfg);
         if (creditBudget && creditBudget > 0 && bearerToken) {
+          // Read the user-configured check interval from config (default: 60 min)
+          const xCfg = (cfg as Record<string, unknown>)?.channels as Record<string, unknown> | undefined;
+          const usageCheckIntervalMinutes = (xCfg?.x as Record<string, unknown> | undefined)?.usageCheckIntervalMinutes as number | undefined;
           await initCreditBudget({
             budget: creditBudget,
             bearerToken,
             log,
-            usageCheckIntervalMinutes: undefined, // uses default 60 min
+            usageCheckIntervalMinutes: usageCheckIntervalMinutes ?? 60,
             onBudgetExceeded: async (usage, budget) => {
               log?.error?.(
                 `BUDGET EXCEEDED: ${usage}/${budget} credits. All X API posts are now blocked.`,
@@ -525,10 +528,33 @@ async function handleIncomingMention(
         text: post.text,
         replyToId: post.id,
         reply: async (responseText: string) => {
-          const client = new XApiClient({
-            accessToken: account.accessToken,
-          });
-          await client.createPost({
+          // Build the client with the correct auth mode for this account
+          // (mirrors the logic in outbound.sendText to avoid auth failures for OAuth 1.0a accounts)
+          const isOAuth1Reply = account.authMode === "oauth1" &&
+            account.oauth1AccessToken &&
+            account.oauth1AccessTokenSecret &&
+            account.oauth1ConsumerKey &&
+            account.oauth1ConsumerSecret;
+
+          const replyClient = new XApiClient(
+            isOAuth1Reply
+              ? {
+                  authMode: "oauth1",
+                  oauth1Credentials: {
+                    consumerKey: account.oauth1ConsumerKey!,
+                    consumerSecret: account.oauth1ConsumerSecret!,
+                    accessToken: account.oauth1AccessToken!,
+                    accessTokenSecret: account.oauth1AccessTokenSecret!,
+                  },
+                  accountId: account.accountId,
+                }
+              : {
+                  authMode: "oauth2",
+                  accessToken: account.accessToken,
+                  accountId: account.accountId,
+                },
+          );
+          await replyClient.createPost({
             text: responseText,
             inReplyToPostId: post.id,
           });

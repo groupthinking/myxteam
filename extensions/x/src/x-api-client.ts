@@ -227,6 +227,13 @@ export class XApiClient {
    */
   async getUserByUsername(username: string): Promise<UserLookupResult | null> {
     const cleanUsername = username.replace(/^@/, "");
+    // Security: validate username contains only alphanumeric chars and underscores
+    // to prevent path traversal attacks (e.g. "../me" → /users/me).
+    // X usernames are limited to A-Z, 0-9, and underscores.
+    if (!/^[A-Za-z0-9_]{1,50}$/.test(cleanUsername)) {
+      this.log?.warn?.(`Rejected invalid username for lookup: "${cleanUsername}"`);
+      return null;
+    }
     try {
       const response = await this.request("GET", `/users/by/username/${cleanUsername}`);
       if (response.data) {
@@ -250,7 +257,16 @@ export class XApiClient {
    */
   async fetchThread(conversationId: string): Promise<FetchThreadResult> {
     try {
-      const query = `conversation_id:${conversationId}`;
+      // Security: X conversation IDs are numeric strings. Validate before interpolating
+      // into the search query to prevent search operator injection attacks.
+      if (!/^\d{1,30}$/.test(conversationId)) {
+        this.log?.warn?.(`Rejected invalid conversationId for thread fetch: "${conversationId}"`);
+        return { posts: [] };
+      }
+      // Quote the value in the query to prevent operator injection even if validation
+      // is bypassed. Escape any embedded double-quotes as a defence-in-depth measure.
+      const escapedId = conversationId.replace(/"/g, '\\"');
+      const query = `conversation_id:"${escapedId}"`;
       const params = new URLSearchParams({
         query,
         max_results: "100",
@@ -273,14 +289,16 @@ export class XApiClient {
         }
       }
 
-      const posts = (response.data as Array<Record<string, unknown>>).map((tweet) => ({
-        id: tweet.id as string,
-        text: tweet.text as string,
-        authorId: (tweet.author_id as string) ?? "",
-        authorUsername: userMap.get(tweet.author_id as string),
-        createdAt: tweet.created_at as string | undefined,
-        conversationId: tweet.conversation_id as string | undefined,
-      }));
+      const posts = (response.data as Array<Record<string, unknown>>)
+        .filter((tweet) => typeof tweet.author_id === "string" && tweet.author_id.length > 0)
+        .map((tweet) => ({
+          id: tweet.id as string,
+          text: tweet.text as string,
+          authorId: tweet.author_id as string,
+          authorUsername: userMap.get(tweet.author_id as string),
+          createdAt: tweet.created_at as string | undefined,
+          conversationId: tweet.conversation_id as string | undefined,
+        }));
 
       // Sort chronologically
       posts.sort((a, b) => {

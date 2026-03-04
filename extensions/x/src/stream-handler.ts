@@ -432,7 +432,14 @@ function parseStreamPost(raw: unknown): StreamPost | null {
 
   const obj = raw as Record<string, unknown>;
   const data = obj.data as Record<string, unknown> | undefined;
-  if (!data || typeof data.id !== "string" || typeof data.text !== "string") {
+  // Require id, text, and author_id — a post without an author is malformed.
+  if (
+    !data ||
+    typeof data.id !== "string" ||
+    typeof data.text !== "string" ||
+    typeof data.author_id !== "string" ||
+    data.author_id.length === 0
+  ) {
     return null;
   }
 
@@ -461,7 +468,7 @@ function parseStreamPost(raw: unknown): StreamPost | null {
   return {
     id: data.id as string,
     text: data.text as string,
-    authorId: (data.author_id as string) ?? "",
+    authorId: data.author_id as string,
     authorUsername,
     conversationId: data.conversation_id as string | undefined,
     inReplyToUserId: data.in_reply_to_user_id as string | undefined,

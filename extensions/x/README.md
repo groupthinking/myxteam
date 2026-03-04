@@ -47,6 +47,8 @@ extensions/x/
 
 Add to your OpenClaw config under `channels.x`:
 
+**OAuth 2.0 (recommended for new apps):**
+
 ```yaml
 channels:
   x:
@@ -54,6 +56,7 @@ channels:
     clientId: "YOUR_OAUTH2_CLIENT_ID"          # For token refresh
     clientSecret: "YOUR_OAUTH2_CLIENT_SECRET"  # For token refresh
     creditBudget: 10000                        # Monthly credit cap (optional)
+    usageCheckIntervalMinutes: 60              # How often to check credit usage
     accounts:
       research-agent:
         enabled: true
@@ -67,6 +70,24 @@ channels:
         accessToken: "USER_ACCESS_TOKEN"
         refreshToken: "USER_REFRESH_TOKEN"
         name: "Writer Agent"
+```
+
+**OAuth 1.0a (for apps using Consumer Key/Secret):**
+
+```yaml
+channels:
+  x:
+    bearerToken: "YOUR_APP_BEARER_TOKEN"
+    oauth1ConsumerKey: "YOUR_CONSUMER_KEY"     # API Key from Developer Portal
+    oauth1ConsumerSecret: "YOUR_CONSUMER_SECRET"
+    creditBudget: 10000
+    accounts:
+      agent-account:
+        enabled: true
+        agentUsername: "YourAgentUsername"
+        oauth1AccessToken: "USER_OAUTH1_ACCESS_TOKEN"
+        oauth1AccessTokenSecret: "USER_OAUTH1_ACCESS_TOKEN_SECRET"
+        name: "My Agent"
 ```
 
 ## Requirements
