@@ -214,10 +214,6 @@ export function getAllAgentUsernames(cfg: OpenClawConfig): string[] {
 }
 
 /**
- * Find the account ID that corresponds to a given @username.
- * Used to route incoming mentions to the correct agent.
- */
-/**
  * Resolve the smart-reply pipeline configuration from the X channel config.
  * Returns `undefined` when the feature is disabled or not configured.
  */
@@ -241,6 +237,10 @@ export function resolveSmartReplyConfig(
   };
 }
 
+/**
+ * Find the account ID that corresponds to a given @username.
+ * Used to route incoming mentions to the correct agent.
+ */
 export function findAccountByUsername(
   cfg: OpenClawConfig,
   username: string,

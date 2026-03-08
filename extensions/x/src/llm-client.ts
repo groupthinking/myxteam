@@ -205,8 +205,11 @@ export class LLMClient {
 
     try {
       return JSON.parse(response.content) as T;
-    } catch {
-      this.log?.error?.("[LLMClient] Failed to parse JSON response");
+    } catch (err) {
+      this.log?.error?.(
+        `[LLMClient] Failed to parse JSON response. Raw content: "${response.content}"`,
+        err,
+      );
       throw new Error("LLM returned invalid JSON");
     }
   }

@@ -120,13 +120,17 @@ export class SmartReplyPipeline {
       const msg = err instanceof Error ? err.message : String(err);
       this.log?.error?.(`[SmartReply] Classification failed for ${mention.id}: ${msg}`);
 
-      // On failure, fall through to normal pipeline (reply)
+      // On failure, escalate rather than silently forward. This prevents a
+      // bad actor from bypassing the smart-reply filter by deliberately
+      // triggering a classification error (e.g. via prompt injection that
+      // produces invalid JSON). Escalated messages are still forwarded to
+      // OpenClaw's pipeline but flagged for human review.
       const fallback: ClassificationResult = {
         intent: "unknown",
         sentiment: "neutral",
         confidence: 0,
-        route: "reply",
-        reason: "classification failed — falling through",
+        route: "escalate",
+        reason: "classification failed — escalating for review",
       };
 
       this.bus.emit("smart-reply:error", {
@@ -156,7 +160,7 @@ export class SmartReplyPipeline {
     // Clamp confidence
     result.confidence = Math.max(0, Math.min(1, result.confidence));
 
-    // Hard rules
+    // Hard rules — deterministic, regardless of what the LLM suggested
     if (result.intent === "spam") {
       result.route = "ignore";
     } else if (result.intent === "escalation") {
@@ -164,6 +168,11 @@ export class SmartReplyPipeline {
     } else if (result.confidence < this.confidenceThreshold) {
       result.route = "escalate";
       result.reason = `low confidence (${result.confidence.toFixed(2)})`;
+    } else {
+      // Default: for all other non-spam, non-escalation, sufficiently-confident
+      // cases, always reply — regardless of what the LLM suggested. This prevents
+      // the LLM from silently dropping legitimate mentions via route:"ignore".
+      result.route = "reply";
     }
 
     return result;

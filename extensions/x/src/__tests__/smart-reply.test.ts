@@ -120,6 +120,25 @@ describe("SmartReplyPipeline", () => {
       expect(result.reason).toContain("low confidence");
     });
 
+    it("should always route to reply for non-spam non-escalation above threshold (enforceRouting default)", async () => {
+      // The LLM might suggest route:"ignore" for a legitimate mention.
+      // enforceRouting must override this to "reply" for the default case.
+      const classification: ClassificationResult = {
+        intent: "question",
+        sentiment: "neutral",
+        confidence: 0.8,
+        route: "ignore", // LLM incorrectly suggests ignore
+        reason: "unclear",
+      };
+      globalThis.fetch = mockLLMResponse(classification);
+
+      const { pipeline } = buildPipeline();
+      const result = await pipeline.classify(MENTION);
+
+      expect(result.intent).toBe("question");
+      expect(result.route).toBe("reply"); // Overridden by enforceRouting default
+    });
+
     it("should clamp confidence to [0, 1]", async () => {
       const classification: ClassificationResult = {
         intent: "praise",
@@ -160,7 +179,9 @@ describe("SmartReplyPipeline", () => {
       );
     });
 
-    it("should fall through to reply on LLM error", async () => {
+    it("should escalate (not silently forward) on LLM error", async () => {
+      // Fail-secure: on classification error, escalate for human review rather
+      // than blindly forwarding. This prevents prompt-injection bypass attacks.
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: false,
         status: 500,
@@ -174,7 +195,7 @@ describe("SmartReplyPipeline", () => {
       const result = await pipeline.classify(MENTION);
 
       expect(result.intent).toBe("unknown");
-      expect(result.route).toBe("reply"); // Fail-open: still forward to pipeline
+      expect(result.route).toBe("escalate"); // Fail-secure: escalate for review
       expect(errorHandler).toHaveBeenCalledWith(
         expect.objectContaining({
           mentionId: "tweet-123",
