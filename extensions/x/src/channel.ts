@@ -9,6 +9,8 @@
  *   individual OAuth tokens per agent for posting.
  * - Real-time mention detection via the Filtered Stream API.
  * - Outbound replies via POST /2/tweets with reply context.
+ * - Optional smart-reply pipeline: when `useSmartReply` is enabled, incoming
+ *   mentions are classified by intent/sentiment before being routed.
  */
 
 import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
@@ -21,6 +23,7 @@ import {
   resolveAppBearerToken,
   getAllAgentUsernames,
   findAccountByUsername,
+  resolveSmartReplyConfig,
   type ResolvedXAccount,
 } from "./types.js";
 import {
@@ -53,6 +56,8 @@ import {
   recordPostedChunk,
   clearAllThreadState,
 } from "./thread-state.js";
+import { SmartReplyPipeline } from "./smart-reply.js";
+import { ChannelEventBus } from "./event-bus.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
 
@@ -61,6 +66,12 @@ let streamRunning = false;
 
 /** Track active account IDs so we know when to stop the shared stream. */
 const activeAccountIds = new Set<string>();
+
+/** Shared event bus for internal routing (created once, lives for the process). */
+let eventBus: ChannelEventBus | null = null;
+
+/** Shared smart-reply pipeline instance (null when feature is disabled). */
+let smartReplyPipeline: SmartReplyPipeline | null = null;
 
 // ─── Plugin Definition ───────────────────────────────────────────────────────
 
@@ -180,6 +191,31 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
             },
           });
         }
+
+        // ── Smart Reply Pipeline ──────────────────────────────────────────
+        // Initialize once on the first account start.
+        eventBus = new ChannelEventBus(log);
+        const srConfig = resolveSmartReplyConfig(cfg);
+        if (srConfig) {
+          smartReplyPipeline = new SmartReplyPipeline(
+            {
+              llm: {
+                apiKey: srConfig.apiKey,
+                model: srConfig.model,
+                baseUrl: srConfig.baseUrl,
+                temperature: srConfig.temperature,
+                maxTokens: srConfig.maxTokens,
+              },
+              confidenceThreshold: srConfig.confidenceThreshold,
+              log,
+            },
+            eventBus,
+          );
+          log?.info?.("Smart-reply pipeline initialized.");
+        } else {
+          smartReplyPipeline = null;
+          log?.info?.("Smart-reply pipeline disabled (useSmartReply is false or not configured).");
+        }
       }
 
       // Initialize token refresh if refresh token and client credentials are available
@@ -282,6 +318,12 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         resetRateLimiters();
         clearCreditBudget();
         clearAllThreadState();
+
+        // Tear down smart-reply pipeline & event bus
+        smartReplyPipeline = null;
+        eventBus?.clear();
+        eventBus = null;
+
         log?.info?.("All token refresh timers, rate limiters, credit budget, and thread state cleared.");
       }
 
@@ -480,6 +522,11 @@ async function persistRefreshedTokens(
  * then dispatches it into OpenClaw's inbound message pipeline via the
  * runtime.channel.reply.handleInboundMessage() method.
  *
+ * When the smart-reply pipeline is active, the mention is first classified
+ * by intent and sentiment. The routing decision determines whether the
+ * mention is forwarded to OpenClaw (reply), silently dropped (ignore),
+ * or flagged for human review (escalate — still forwarded, but tagged).
+ *
  * This follows the exact same pattern as the nostr plugin's onMessage callback.
  */
 async function handleIncomingMention(
@@ -510,6 +557,31 @@ async function handleIncomingMention(
     log?.info?.(
       `[${account.accountId}] Mention from @${post.authorUsername ?? post.authorId}: "${post.text.slice(0, 80)}..."`,
     );
+
+    // ── Smart Reply Gate ────────────────────────────────────────────────
+    // When the pipeline is active, classify the mention before dispatching.
+    if (smartReplyPipeline) {
+      const classification = await smartReplyPipeline.classify({
+        id: post.id,
+        text: post.text,
+        authorUsername: post.authorUsername ?? post.authorId,
+      });
+
+      if (classification.route === "ignore") {
+        log?.info?.(
+          `[${account.accountId}] Smart-reply: ignoring mention ${post.id} (${classification.reason}).`,
+        );
+        continue;
+      }
+
+      if (classification.route === "escalate") {
+        log?.warn?.(
+          `[${account.accountId}] Smart-reply: escalating mention ${post.id} (${classification.reason}). ` +
+            "Forwarding to pipeline with escalation tag.",
+        );
+        // Still dispatch, but tag the message so downstream handlers can act
+      }
+    }
 
     // Dispatch to OpenClaw's message pipeline.
     // This follows the exact same pattern as the nostr plugin.

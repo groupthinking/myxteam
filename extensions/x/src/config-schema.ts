@@ -105,6 +105,38 @@ export const XChannelConfigSchema = z.object({
   usageCheckIntervalMinutes: z.number().optional().default(60),
 
   /**
+   * Enable the smart-reply pipeline for incoming mentions.
+   * When true, mentions are classified by intent and sentiment before
+   * being routed to OpenClaw's message pipeline. When false (default),
+   * mentions pass through directly — identical to the original behaviour.
+   */
+  useSmartReply: z.boolean().optional().default(false),
+
+  /**
+   * LLM configuration for the smart-reply pipeline.
+   * Only used when `useSmartReply` is true.
+   *
+   * Supports any OpenAI-compatible chat completions endpoint
+   * (Grok/xAI, OpenAI, Anthropic via proxy, etc.).
+   *
+   * Example:
+   * ```yaml
+   * smartReply:
+   *   apiKey: "xai-..."
+   *   model: "grok-2"
+   *   baseUrl: "https://api.x.ai/v1"
+   * ```
+   */
+  smartReply: z.object({
+    apiKey: z.string().describe("API key for the LLM provider."),
+    model: z.string().optional().default("grok-2"),
+    baseUrl: z.string().optional().default("https://api.x.ai/v1"),
+    temperature: z.number().optional().default(0.2),
+    maxTokens: z.number().optional().default(200),
+    confidenceThreshold: z.number().optional().default(0.5),
+  }).optional(),
+
+  /**
    * Map of agent account configurations, keyed by a stable account ID.
    * Each entry represents one agent identity on X.
    *

@@ -55,6 +55,20 @@ export interface ResolvedXAccount {
   config: XAccountCredentials;
 }
 
+/**
+ * Resolved smart-reply configuration.
+ * Only present when `useSmartReply` is true and `smartReply` is configured.
+ */
+export interface ResolvedSmartReplyConfig {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  temperature: number;
+  maxTokens: number;
+  confidenceThreshold: number;
+}
+
 const DEFAULT_ACCOUNT_ID = "default";
 
 /**
@@ -203,6 +217,30 @@ export function getAllAgentUsernames(cfg: OpenClawConfig): string[] {
  * Find the account ID that corresponds to a given @username.
  * Used to route incoming mentions to the correct agent.
  */
+/**
+ * Resolve the smart-reply pipeline configuration from the X channel config.
+ * Returns `undefined` when the feature is disabled or not configured.
+ */
+export function resolveSmartReplyConfig(
+  cfg: OpenClawConfig,
+): ResolvedSmartReplyConfig | undefined {
+  const xCfg = getXChannelConfig(cfg);
+  if (!xCfg?.useSmartReply) return undefined;
+
+  const sr = xCfg.smartReply;
+  if (!sr?.apiKey) return undefined;
+
+  return {
+    enabled: true,
+    apiKey: sr.apiKey,
+    model: sr.model ?? "grok-2",
+    baseUrl: sr.baseUrl ?? "https://api.x.ai/v1",
+    temperature: sr.temperature ?? 0.2,
+    maxTokens: sr.maxTokens ?? 200,
+    confidenceThreshold: sr.confidenceThreshold ?? 0.5,
+  };
+}
+
 export function findAccountByUsername(
   cfg: OpenClawConfig,
   username: string,

@@ -15,6 +15,7 @@ import {
   resolveClientCredentials,
   getAllAgentUsernames,
   findAccountByUsername,
+  resolveSmartReplyConfig,
 } from "../types.js";
 
 /** Helper to build a minimal OpenClaw config with X channel settings. */
@@ -205,6 +206,60 @@ describe("types", () => {
     it("should return undefined for unknown username", () => {
       const account = findAccountByUsername(MULTI_ACCOUNT_CONFIG, "UnknownBot");
       expect(account).toBeUndefined();
+    });
+  });
+
+  describe("resolveSmartReplyConfig", () => {
+    it("should return undefined when useSmartReply is false", () => {
+      const cfg = buildConfig({ useSmartReply: false });
+      expect(resolveSmartReplyConfig(cfg)).toBeUndefined();
+    });
+
+    it("should return undefined when useSmartReply is true but no smartReply config", () => {
+      const cfg = buildConfig({ useSmartReply: true });
+      expect(resolveSmartReplyConfig(cfg)).toBeUndefined();
+    });
+
+    it("should return undefined when smartReply has no apiKey", () => {
+      const cfg = buildConfig({
+        useSmartReply: true,
+        smartReply: { model: "grok-2" },
+      });
+      expect(resolveSmartReplyConfig(cfg)).toBeUndefined();
+    });
+
+    it("should return resolved config when properly configured", () => {
+      const cfg = buildConfig({
+        useSmartReply: true,
+        smartReply: {
+          apiKey: "xai-test-key",
+          model: "grok-2",
+          baseUrl: "https://api.x.ai/v1",
+          temperature: 0.3,
+          maxTokens: 150,
+          confidenceThreshold: 0.6,
+        },
+      });
+      const result = resolveSmartReplyConfig(cfg);
+      expect(result).toBeDefined();
+      expect(result!.enabled).toBe(true);
+      expect(result!.apiKey).toBe("xai-test-key");
+      expect(result!.model).toBe("grok-2");
+      expect(result!.confidenceThreshold).toBe(0.6);
+    });
+
+    it("should apply defaults for optional fields", () => {
+      const cfg = buildConfig({
+        useSmartReply: true,
+        smartReply: { apiKey: "key" },
+      });
+      const result = resolveSmartReplyConfig(cfg);
+      expect(result).toBeDefined();
+      expect(result!.model).toBe("grok-2");
+      expect(result!.baseUrl).toBe("https://api.x.ai/v1");
+      expect(result!.temperature).toBe(0.2);
+      expect(result!.maxTokens).toBe(200);
+      expect(result!.confidenceThreshold).toBe(0.5);
     });
   });
 });
