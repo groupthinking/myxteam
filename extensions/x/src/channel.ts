@@ -9,6 +9,8 @@
  *   individual OAuth tokens per agent for posting.
  * - Real-time mention detection via the Filtered Stream API.
  * - Outbound replies via POST /2/tweets with reply context.
+ * - Optional smart-reply pipeline: when `useSmartReply` is enabled, incoming
+ *   mentions are classified by intent/sentiment before being routed.
  */
 
 import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
@@ -21,6 +23,7 @@ import {
   resolveAppBearerToken,
   getAllAgentUsernames,
   findAccountByUsername,
+  resolveSmartReplyConfig,
   type ResolvedXAccount,
 } from "./types.js";
 import {
@@ -53,6 +56,8 @@ import {
   recordPostedChunk,
   clearAllThreadState,
 } from "./thread-state.js";
+import { SmartReplyPipeline } from "./smart-reply.js";
+import { ChannelEventBus } from "./event-bus.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
 
@@ -61,6 +66,12 @@ let streamRunning = false;
 
 /** Track active account IDs so we know when to stop the shared stream. */
 const activeAccountIds = new Set<string>();
+
+/** Shared event bus for internal routing (created once, lives for the process). */
+let eventBus: ChannelEventBus | null = null;
+
+/** Shared smart-reply pipeline instance (null when feature is disabled). */
+let smartReplyPipeline: SmartReplyPipeline | null = null;
 
 // ─── Plugin Definition ───────────────────────────────────────────────────────
 
@@ -180,6 +191,31 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
             },
           });
         }
+
+        // ── Smart Reply Pipeline ──────────────────────────────────────────
+        // Initialize once on the first account start.
+        eventBus = new ChannelEventBus(log);
+        const srConfig = resolveSmartReplyConfig(cfg);
+        if (srConfig) {
+          smartReplyPipeline = new SmartReplyPipeline(
+            {
+              llm: {
+                apiKey: srConfig.apiKey,
+                model: srConfig.model,
+                baseUrl: srConfig.baseUrl,
+                temperature: srConfig.temperature,
+                maxTokens: srConfig.maxTokens,
+              },
+              confidenceThreshold: srConfig.confidenceThreshold,
+              log,
+            },
+            eventBus,
+          );
+          log?.info?.("Smart-reply pipeline initialized.");
+        } else {
+          smartReplyPipeline = null;
+          log?.info?.("Smart-reply pipeline disabled (useSmartReply is false or not configured).");
+        }
       }
 
       // Initialize token refresh if refresh token and client credentials are available
@@ -282,6 +318,12 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         resetRateLimiters();
         clearCreditBudget();
         clearAllThreadState();
+
+        // Tear down smart-reply pipeline & event bus
+        smartReplyPipeline = null;
+        eventBus?.clear();
+        eventBus = null;
+
         log?.info?.("All token refresh timers, rate limiters, credit budget, and thread state cleared.");
       }
 
@@ -480,6 +522,14 @@ async function persistRefreshedTokens(
  * then dispatches it into OpenClaw's inbound message pipeline via the
  * runtime.channel.reply.handleInboundMessage() method.
  *
+ * When the smart-reply pipeline is active, the mention is classified once
+ * (before iterating rules) to avoid redundant LLM calls when a post matches
+ * multiple agent rules. The routing decision determines whether the mention is
+ * forwarded to OpenClaw (reply), silently dropped (ignore), or forwarded with
+ * escalation metadata attached (escalate). The classification result is passed
+ * as `metadata.smartReply` in the inbound message payload so downstream
+ * handlers can inspect intent/sentiment or apply different behaviour.
+ *
  * This follows the exact same pattern as the nostr plugin's onMessage callback.
  */
 async function handleIncomingMention(
@@ -488,6 +538,30 @@ async function handleIncomingMention(
   log?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; debug?: (...args: unknown[]) => void },
 ): Promise<void> {
   const runtime = getXRuntime();
+
+  // ── Smart Reply Classification (once per post, before the rule loop) ────
+  //
+  // Classifying inside the loop would trigger one LLM call per matching rule.
+  // A post that matches multiple agent rules (e.g. mentions two agents) would
+  // incur redundant cost and could produce inconsistent routing decisions.
+  // We classify once here and reuse the result for every matching rule below.
+  let smartReplyClassification: import("./smart-reply.js").ClassificationResult | null = null;
+
+  if (smartReplyPipeline) {
+    smartReplyClassification = await smartReplyPipeline.classify({
+      id: post.id,
+      text: post.text,
+      authorUsername: post.authorUsername ?? post.authorId,
+    });
+
+    // If the post should be ignored, bail out before iterating rules at all.
+    if (smartReplyClassification.route === "ignore") {
+      log?.info?.(
+        `[smart-reply] Ignoring post ${post.id}: ${smartReplyClassification.reason}`,
+      );
+      return;
+    }
+  }
 
   for (const rule of post.matchingRules) {
     // Rule tags are formatted as "agent:<username>"
@@ -511,6 +585,13 @@ async function handleIncomingMention(
       `[${account.accountId}] Mention from @${post.authorUsername ?? post.authorId}: "${post.text.slice(0, 80)}..."`,
     );
 
+    if (smartReplyClassification?.route === "escalate") {
+      log?.warn?.(
+        `[${account.accountId}] Smart-reply: escalating mention ${post.id} ` +
+          `(${smartReplyClassification.reason}). Forwarding to pipeline with escalation metadata.`,
+      );
+    }
+
     // Dispatch to OpenClaw's message pipeline.
     // This follows the exact same pattern as the nostr plugin.
     try {
@@ -527,6 +608,10 @@ async function handleIncomingMention(
         chatId: post.conversationId ?? post.id,
         text: post.text,
         replyToId: post.id,
+        // Pass smart-reply classification as metadata so downstream handlers
+        // can inspect the routing decision (e.g. to apply a different tone for
+        // escalated mentions, or to log intent/sentiment for analytics).
+        ...(smartReplyClassification ? { metadata: { smartReply: smartReplyClassification } } : {}),
         reply: async (responseText: string) => {
           // Build the client with the correct auth mode for this account
           // (mirrors the logic in outbound.sendText to avoid auth failures for OAuth 1.0a accounts)
