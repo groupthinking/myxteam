@@ -120,10 +120,7 @@ export function resolveXAccount(opts: {
   const authMode: "oauth1" | "oauth2" = hasOAuth1 ? "oauth1" : "oauth2";
 
   // An account is configured if it has a username + at least one auth method
-  const configured = Boolean(
-    agentUsername.trim() &&
-    (accessToken.trim() || hasOAuth1),
-  );
+  const configured = Boolean(agentUsername.trim() && (accessToken.trim() || hasOAuth1));
 
   // Client credentials are app-level (shared across all accounts)
   const { clientId, clientSecret } = resolveClientCredentials(opts.cfg);
@@ -145,7 +142,7 @@ export function resolveXAccount(opts: {
     oauth1ConsumerSecret,
     authMode,
     userId: accountCfg?.userId,
-    config: accountCfg ?? { agentUsername: "" },
+    config: accountCfg ?? { agentUsername: "", enabled: true },
   };
 }
 
@@ -217,9 +214,7 @@ export function getAllAgentUsernames(cfg: OpenClawConfig): string[] {
  * Resolve the smart-reply pipeline configuration from the X channel config.
  * Returns `undefined` when the feature is disabled or not configured.
  */
-export function resolveSmartReplyConfig(
-  cfg: OpenClawConfig,
-): ResolvedSmartReplyConfig | undefined {
+export function resolveSmartReplyConfig(cfg: OpenClawConfig): ResolvedSmartReplyConfig | undefined {
   const xCfg = getXChannelConfig(cfg);
   if (!xCfg?.useSmartReply) return undefined;
 

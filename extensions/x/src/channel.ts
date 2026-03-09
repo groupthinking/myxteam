@@ -13,9 +13,35 @@
  *   mentions are classified by intent/sentiment before being routed.
  */
 
-import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
-
+import type { ChannelLogSink, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
 import { XChannelConfigSchema } from "./config-schema.js";
+import {
+  initCreditBudget,
+  clearCreditBudget,
+  checkCreditBudget,
+  getCreditUsageSnapshot,
+} from "./credit-budget.js";
+import { ChannelEventBus } from "./event-bus.js";
+import { initRateLimiter, resetRateLimiters } from "./rate-limiter.js";
+import { getXRuntime } from "./runtime.js";
+import { SmartReplyPipeline } from "./smart-reply.js";
+import {
+  startFilteredStream,
+  stopFilteredStream,
+  getStreamStatus,
+  type StreamPost,
+} from "./stream-handler.js";
+import {
+  resolveReplyToIdForChunk,
+  recordPostedChunk,
+  clearAllThreadState,
+} from "./thread-state.js";
+import {
+  initTokens,
+  clearTokens,
+  clearAllTokens,
+  type TokenRefreshConfig,
+} from "./token-refresh.js";
 import {
   listXAccountIds,
   resolveDefaultXAccountId,
@@ -26,38 +52,8 @@ import {
   resolveSmartReplyConfig,
   type ResolvedXAccount,
 } from "./types.js";
-import {
-  startFilteredStream,
-  stopFilteredStream,
-  getStreamStatus,
-  type StreamPost,
-} from "./stream-handler.js";
-import { XApiClient } from "./x-api-client.js";
-import { getXRuntime } from "./runtime.js";
-import {
-  initTokens,
-  clearTokens,
-  clearAllTokens,
-  type TokenRefreshConfig,
-} from "./token-refresh.js";
-import {
-  initRateLimiter,
-  resetRateLimiters,
-} from "./rate-limiter.js";
-import {
-  initCreditBudget,
-  clearCreditBudget,
-  checkCreditBudget,
-  getCreditUsageSnapshot,
-} from "./credit-budget.js";
 import { resolveCreditBudget } from "./types.js";
-import {
-  resolveReplyToIdForChunk,
-  recordPostedChunk,
-  clearAllThreadState,
-} from "./thread-state.js";
-import { SmartReplyPipeline } from "./smart-reply.js";
-import { ChannelEventBus } from "./event-bus.js";
+import { XApiClient } from "./x-api-client.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
 
@@ -172,13 +168,21 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         const bearerToken = resolveAppBearerToken(cfg);
         if (creditBudget && creditBudget > 0 && bearerToken) {
           // Read the user-configured check interval from config (default: 60 min)
-          const xCfg = (cfg as Record<string, unknown>)?.channels as Record<string, unknown> | undefined;
-          const usageCheckIntervalMinutes = (xCfg?.x as Record<string, unknown> | undefined)?.usageCheckIntervalMinutes as number | undefined;
+          const xCfg = (cfg.channels as Record<string, unknown> | undefined)?.x as
+            | Record<string, unknown>
+            | undefined;
+          const rawIntervalMinutes = xCfg?.usageCheckIntervalMinutes as number | undefined;
+          // Clamp to a minimum of 1 minute to prevent setInterval spinning at 0 ms
+          // if the user supplies 0, a negative value, or NaN.
+          const usageCheckIntervalMinutes = Math.max(
+            1,
+            Number.isFinite(rawIntervalMinutes as number) ? (rawIntervalMinutes as number) : 60,
+          );
           await initCreditBudget({
             budget: creditBudget,
             bearerToken,
             log,
-            usageCheckIntervalMinutes: usageCheckIntervalMinutes ?? 60,
+            refreshIntervalMs: usageCheckIntervalMinutes * 60 * 1000,
             onBudgetExceeded: async (usage, budget) => {
               log?.error?.(
                 `BUDGET EXCEEDED: ${usage}/${budget} credits. All X API posts are now blocked.`,
@@ -224,21 +228,15 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
           clientId: account.clientId,
           clientSecret: account.clientSecret,
         };
-        initTokens(
-          account.accountId,
-          account.accessToken,
-          account.refreshToken,
-          tokenConfig,
-          {
-            log,
-            onRefreshed: async (acctId, tokens) => {
-              log?.info?.(
-                `[${acctId}] Tokens refreshed. New expiry: ${new Date(tokens.expiresAt).toISOString()}. Persisting to config.`,
-              );
-              await persistRefreshedTokens(acctId, tokens.accessToken, tokens.refreshToken, log);
-            },
+        initTokens(account.accountId, account.accessToken, account.refreshToken, tokenConfig, {
+          log,
+          onRefreshed: async (acctId, tokens) => {
+            log?.info?.(
+              `[${acctId}] Tokens refreshed. New expiry: ${new Date(tokens.expiresAt).toISOString()}. Persisting to config.`,
+            );
+            await persistRefreshedTokens(acctId, tokens.accessToken, tokens.refreshToken, log);
           },
-        );
+        });
         log?.info?.(`[${account.accountId}] OAuth token refresh scheduled.`);
       }
 
@@ -324,7 +322,9 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
         eventBus?.clear();
         eventBus = null;
 
-        log?.info?.("All token refresh timers, rate limiters, credit budget, and thread state cleared.");
+        log?.info?.(
+          "All token refresh timers, rate limiters, credit budget, and thread state cleared.",
+        );
       }
 
       log?.info?.(`[${accountId}] X channel stopped.`);
@@ -362,7 +362,7 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       if (!budgetCheck.allowed) {
         throw new Error(
           `X API credit budget exceeded. ${budgetCheck.reason ?? ""} ` +
-          `Increase the budget in channels.x.creditBudget or wait for the monthly reset.`,
+            `Increase the budget in channels.x.creditBudget or wait for the monthly reset.`,
         );
       }
 
@@ -378,15 +378,17 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
       const effectiveReplyToId = resolveReplyToIdForChunk(to, replyToId);
 
       // Build the API client with the correct auth mode for this account
-      const isOAuth1 = account.authMode === "oauth1" &&
+      const isOAuth1 =
+        account.authMode === "oauth1" &&
         account.oauth1AccessToken &&
         account.oauth1AccessTokenSecret &&
         account.oauth1ConsumerKey &&
         account.oauth1ConsumerSecret;
 
-      const tokenRefreshConfig = !isOAuth1 && account.clientId
-        ? { clientId: account.clientId, clientSecret: account.clientSecret }
-        : undefined;
+      const tokenRefreshConfig =
+        !isOAuth1 && account.clientId
+          ? { clientId: account.clientId, clientSecret: account.clientSecret }
+          : undefined;
 
       const client = new XApiClient(
         isOAuth1
@@ -469,7 +471,7 @@ async function persistRefreshedTokens(
   accountId: string,
   accessToken: string,
   refreshToken: string,
-  log?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void },
+  log?: ChannelLogSink,
 ): Promise<void> {
   const runtime = getXRuntime();
 
@@ -492,9 +494,7 @@ async function persistRefreshedTokens(
     const accountEntry = accounts?.[accountId] as Record<string, unknown> | undefined;
 
     if (!accountEntry) {
-      log?.warn?.(
-        `[${accountId}] Account not found in config. Cannot persist refreshed tokens.`,
-      );
+      log?.warn?.(`[${accountId}] Account not found in config. Cannot persist refreshed tokens.`);
       return;
     }
 
@@ -503,7 +503,9 @@ async function persistRefreshedTokens(
     accountEntry.refreshToken = refreshToken;
 
     // Write the updated config back to disk
-    await runtime.config.writeConfigFile(nextCfg as Parameters<typeof runtime.config.writeConfigFile>[0]);
+    await runtime.config.writeConfigFile(
+      nextCfg as Parameters<typeof runtime.config.writeConfigFile>[0],
+    );
 
     log?.info?.(`[${accountId}] Refreshed tokens persisted to config file.`);
   } catch (err) {
@@ -535,7 +537,7 @@ async function persistRefreshedTokens(
 async function handleIncomingMention(
   post: StreamPost,
   cfg: OpenClawConfig,
-  log?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; debug?: (...args: unknown[]) => void },
+  log?: ChannelLogSink,
 ): Promise<void> {
   const runtime = getXRuntime();
 
@@ -556,9 +558,7 @@ async function handleIncomingMention(
 
     // If the post should be ignored, bail out before iterating rules at all.
     if (smartReplyClassification.route === "ignore") {
-      log?.info?.(
-        `[smart-reply] Ignoring post ${post.id}: ${smartReplyClassification.reason}`,
-      );
+      log?.info?.(`[smart-reply] Ignoring post ${post.id}: ${smartReplyClassification.reason}`);
       return;
     }
   }
@@ -615,7 +615,8 @@ async function handleIncomingMention(
         reply: async (responseText: string) => {
           // Build the client with the correct auth mode for this account
           // (mirrors the logic in outbound.sendText to avoid auth failures for OAuth 1.0a accounts)
-          const isOAuth1Reply = account.authMode === "oauth1" &&
+          const isOAuth1Reply =
+            account.authMode === "oauth1" &&
             account.oauth1AccessToken &&
             account.oauth1AccessTokenSecret &&
             account.oauth1ConsumerKey &&
@@ -647,9 +648,7 @@ async function handleIncomingMention(
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log?.error?.(
-        `[${account.accountId}] Failed to dispatch inbound mention: ${msg}`,
-      );
+      log?.error?.(`[${account.accountId}] Failed to dispatch inbound mention: ${msg}`);
     }
   }
 }

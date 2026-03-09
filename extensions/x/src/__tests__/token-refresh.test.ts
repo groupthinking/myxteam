@@ -59,22 +59,16 @@ describe("token-refresh", () => {
     });
 
     it("should throw if no tokens are stored", async () => {
-      await expect(
-        getValidAccessToken("agent-unknown", TEST_CONFIG),
-      ).rejects.toThrow("No tokens stored for account agent-unknown");
+      await expect(getValidAccessToken("agent-unknown", TEST_CONFIG)).rejects.toThrow(
+        "No tokens stored for account agent-unknown",
+      );
     });
 
     it("should refresh token when expired", async () => {
-      // Initialize with a very short expiry
-      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
-        expiresInSeconds: 1, // 1 second
-      });
-
-      // Advance time past expiry + buffer
-      vi.advanceTimersByTime(7 * 60 * 1000); // 7 minutes (past 5-min buffer)
-
-      // Mock the refresh endpoint
-      mockFetch.mockResolvedValueOnce({
+      // Mock the refresh endpoint — the scheduled timer fires immediately
+      // (delay = 0) when we advance past expiry, so we need a response ready
+      // before calling advanceTimersByTime.
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
           access_token: "new-access",
@@ -84,12 +78,32 @@ describe("token-refresh", () => {
         }),
       });
 
+      // Initialize with a very short expiry
+      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
+        expiresInSeconds: 1, // 1 second
+      });
+
+      // Advance time past expiry + buffer.
+      // This fires the scheduled refresh (delay = 0 because token already
+      // expired past the 5-min buffer), which consumes one fetch call.
+      await vi.advanceTimersByTimeAsync(7 * 60 * 1000); // 7 minutes
+
+      // Capture the scheduled-refresh call before clearing so we can
+      // assert on its shape (URL, method, headers, body).
+      const scheduledCall = mockFetch.mock.calls[0] as [string, RequestInit];
+      mockFetch.mockClear();
+
+      // The scheduled refresh already updated the cache, so
+      // getValidAccessToken should return the cached token without
+      // making another network call.
       const token = await getValidAccessToken("agent-1", TEST_CONFIG);
       expect(token).toBe("new-access");
 
-      // Verify the refresh request was made correctly
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-      const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+      // The cached token was returned — no additional fetch needed.
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      // Verify the scheduled refresh request was formed correctly.
+      const [url, opts] = scheduledCall;
       expect(url).toBe("https://api.x.com/2/oauth2/token");
       expect(opts.method).toBe("POST");
       expect(opts.headers).toHaveProperty("Authorization");
@@ -98,22 +112,24 @@ describe("token-refresh", () => {
     });
 
     it("should throw when refresh fails", async () => {
-      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
-        expiresInSeconds: 1,
-      });
-
-      vi.advanceTimersByTime(7 * 60 * 1000);
-
-      mockFetch.mockResolvedValueOnce({
+      // Provide a failing mock before init so the scheduled timer
+      // (which fires at delay=0) also gets a response.
+      mockFetch.mockResolvedValue({
         ok: false,
         status: 401,
         statusText: "Unauthorized",
         text: async () => "Invalid refresh token",
       });
 
-      await expect(
-        getValidAccessToken("agent-1", TEST_CONFIG),
-      ).rejects.toThrow("Token refresh failed");
+      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
+        expiresInSeconds: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(7 * 60 * 1000);
+
+      await expect(getValidAccessToken("agent-1", TEST_CONFIG)).rejects.toThrow(
+        "Token refresh failed",
+      );
     });
   });
 
@@ -143,13 +159,8 @@ describe("token-refresh", () => {
 
   describe("Basic auth encoding", () => {
     it("should send Basic auth header with client credentials", async () => {
-      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
-        expiresInSeconds: 1,
-      });
-
-      vi.advanceTimersByTime(7 * 60 * 1000);
-
-      mockFetch.mockResolvedValueOnce({
+      // Provide a mock before init so the scheduled timer (delay=0) gets a response.
+      mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
           access_token: "new-access",
@@ -158,8 +169,13 @@ describe("token-refresh", () => {
         }),
       });
 
-      await getValidAccessToken("agent-1", TEST_CONFIG);
+      initTokens("agent-1", "old-access", "old-refresh", TEST_CONFIG, {
+        expiresInSeconds: 1,
+      });
 
+      await vi.advanceTimersByTimeAsync(7 * 60 * 1000);
+
+      // The scheduled refresh already fired; verify the first call's auth header.
       const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
       const authHeader = (opts.headers as Record<string, string>)["Authorization"];
       const expectedCredentials = Buffer.from(

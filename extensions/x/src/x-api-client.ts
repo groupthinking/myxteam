@@ -14,18 +14,9 @@
  */
 
 import type { ChannelLogSink } from "openclaw/plugin-sdk";
-import {
-  getValidAccessToken,
-  type TokenRefreshConfig,
-} from "./token-refresh.js";
-import {
-  consumePostRateLimit,
-  waitForPostRateLimit,
-} from "./rate-limiter.js";
-import {
-  buildOAuth1HeaderAsync,
-  type OAuth1Credentials,
-} from "./oauth1.js";
+import { buildOAuth1HeaderAsync, type OAuth1Credentials } from "./oauth1.js";
+import { consumePostRateLimit, waitForPostRateLimit } from "./rate-limiter.js";
+import { getValidAccessToken, type TokenRefreshConfig } from "./token-refresh.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -138,11 +129,7 @@ export class XApiClient {
    */
   private async resolveAccessToken(): Promise<string> {
     if (this.tokenRefreshConfig) {
-      const token = await getValidAccessToken(
-        this.accountId,
-        this.tokenRefreshConfig,
-        this.log,
-      );
+      const token = await getValidAccessToken(this.accountId, this.tokenRefreshConfig, this.log);
       this.accessToken = token;
       return token;
     }
@@ -161,16 +148,10 @@ export class XApiClient {
   async createPost(params: CreatePostParams): Promise<CreatePostResult> {
     // ── Rate Limiting ──────────────────────────────────────────────────────
     if (this.rateLimitEnabled) {
-      const allowed = await waitForPostRateLimit(
-        this.accountId,
-        this.log,
-        this.rateLimitMaxWaitMs,
-      );
+      const allowed = await waitForPostRateLimit(this.accountId, this.log, this.rateLimitMaxWaitMs);
 
       if (!allowed) {
-        this.log?.warn?.(
-          `[${this.accountId}] Post creation rate-limited. Max wait exceeded.`,
-        );
+        this.log?.warn?.(`[${this.accountId}] Post creation rate-limited. Max wait exceeded.`);
         return {
           ok: false,
           error: "Rate limit exceeded. Try again later.",
@@ -202,10 +183,11 @@ export class XApiClient {
 
     try {
       const response = await this.request("POST", "/tweets", body);
+      const data = response.data as Record<string, unknown> | undefined;
 
-      if (response.data?.id) {
-        this.log?.info?.(`Post created: ${response.data.id}`);
-        return { ok: true, postId: response.data.id as string };
+      if (data?.id) {
+        this.log?.info?.(`Post created: ${data.id}`);
+        return { ok: true, postId: data.id as string };
       }
 
       return { ok: false, error: "No post ID in response." };
@@ -236,11 +218,12 @@ export class XApiClient {
     }
     try {
       const response = await this.request("GET", `/users/by/username/${cleanUsername}`);
-      if (response.data) {
+      const data = response.data as Record<string, unknown> | undefined;
+      if (data) {
         return {
-          id: response.data.id as string,
-          name: response.data.name as string,
-          username: response.data.username as string,
+          id: data.id as string,
+          name: data.name as string,
+          username: data.username as string,
         };
       }
       return null;
@@ -283,8 +266,9 @@ export class XApiClient {
 
       // Build a username lookup from includes.users
       const userMap = new Map<string, string>();
-      if (response.includes?.users && Array.isArray(response.includes.users)) {
-        for (const user of response.includes.users as Array<Record<string, string>>) {
+      const includes = response.includes as Record<string, unknown> | undefined;
+      if (includes?.users && Array.isArray(includes.users)) {
+        for (const user of includes.users as Array<Record<string, string>>) {
           userMap.set(user.id, user.username);
         }
       }
@@ -370,7 +354,9 @@ export class XApiClient {
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "");
-      throw new Error(`X API ${method} ${path}: ${response.status} ${response.statusText} — ${errorBody}`);
+      throw new Error(
+        `X API ${method} ${path}: ${response.status} ${response.statusText} — ${errorBody}`,
+      );
     }
 
     return (await response.json()) as Record<string, unknown>;

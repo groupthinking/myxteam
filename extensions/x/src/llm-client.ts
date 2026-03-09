@@ -5,9 +5,9 @@
  * and Anthropic-compatible APIs. Includes response caching and structured
  * JSON output support.
  *
- * Extracted from the swarm codebase and simplified for the smart-reply
- * pipeline. Pricing constants are externalized into the config object
- * so callers can override them without touching this module.
+ * Simplified for the smart-reply pipeline. Pricing constants are
+ * externalized into the config object so callers can override them
+ * without touching this module.
  */
 
 import type { ChannelLogSink } from "openclaw/plugin-sdk";
@@ -208,7 +208,6 @@ export class LLMClient {
     } catch (err) {
       this.log?.error?.(
         `[LLMClient] Failed to parse JSON response. Raw content: "${response.content}"`,
-        err,
       );
       throw new Error("LLM returned invalid JSON");
     }
@@ -230,10 +229,7 @@ export class LLMClient {
 
   // ── Internals ───────────────────────────────────────────────────────────
 
-  private buildCacheKey(
-    prompt: string,
-    options?: Record<string, unknown>,
-  ): string {
+  private buildCacheKey(prompt: string, options?: Record<string, unknown>): string {
     return `${this.config.model}:${prompt}:${JSON.stringify(options ?? {})}`;
   }
 }
