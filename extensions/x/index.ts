@@ -1,13 +1,13 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { xPlugin } from "./src/channel.js";
+import { XChannelConfigSchema } from "./src/config-schema.js";
 import { setXRuntime } from "./src/runtime.js";
 
 const plugin = {
   id: "x",
   name: "X (Twitter)",
   description: "OpenClaw X channel plugin for mention-driven AI agent interactions",
-  configSchema: emptyPluginConfigSchema(),
+  configSchema: XChannelConfigSchema as unknown as Record<string, unknown>,
 
   register(api: OpenClawPluginApi) {
     // Store the runtime reference so the channel can dispatch inbound messages

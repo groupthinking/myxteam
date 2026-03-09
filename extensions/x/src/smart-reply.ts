@@ -5,8 +5,7 @@
  * Uses a single LLM call to classify the mention, then decides whether
  * and how to route it to OpenClaw's message pipeline.
  *
- * This replaces the over-engineered swarm agent hierarchy with a simple,
- * single-pass approach:
+ * A simple, single-pass approach:
  *   1. Classify intent & sentiment via one LLM call.
  *   2. Decide routing (reply, ignore, escalate).
  *   3. Emit an internal event so channel.ts can act on the decision.
@@ -16,8 +15,8 @@
  */
 
 import type { ChannelLogSink } from "openclaw/plugin-sdk";
-import { LLMClient, type LLMConfig } from "./llm-client.js";
 import { ChannelEventBus } from "./event-bus.js";
+import { LLMClient, type LLMConfig } from "./llm-client.js";
 
 // ─── Public Types ───────────────────────────────────────────────────────────
 

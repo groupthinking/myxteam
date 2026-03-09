@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { XApiClient } from "../x-api-client.js";
 import { initRateLimiter, resetRateLimiters, consumePostRateLimit } from "../rate-limiter.js";
+import { XApiClient } from "../x-api-client.js";
 
 // Mock fetch
 const mockFetch = vi.fn();
@@ -204,14 +204,14 @@ describe("XApiClient", () => {
               text: "Second post",
               author_id: "user-a",
               created_at: "2026-03-01T12:01:00Z",
-              conversation_id: "conv-1",
+              conversation_id: "1234567890",
             },
             {
               id: "post-1",
               text: "First post",
               author_id: "user-b",
               created_at: "2026-03-01T12:00:00Z",
-              conversation_id: "conv-1",
+              conversation_id: "1234567890",
             },
           ],
           includes: {
@@ -224,7 +224,7 @@ describe("XApiClient", () => {
       });
 
       const client = new XApiClient({ accessToken: "test-token" });
-      const thread = await client.fetchThread("conv-1");
+      const thread = await client.fetchThread("1234567890");
 
       expect(thread.posts).toHaveLength(2);
       // Should be sorted chronologically
@@ -242,7 +242,7 @@ describe("XApiClient", () => {
       });
 
       const client = new XApiClient({ accessToken: "test-token" });
-      const thread = await client.fetchThread("conv-nonexistent");
+      const thread = await client.fetchThread("9999999999");
       expect(thread.posts).toEqual([]);
     });
   });
@@ -252,9 +252,7 @@ describe("XApiClient", () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          dailyUsage: [
-            { date: "2026-03-01", usage: [{ bucket: "tweets", value: 42 }] },
-          ],
+          dailyUsage: [{ date: "2026-03-01", usage: [{ bucket: "tweets", value: 42 }] }],
         }),
       });
 

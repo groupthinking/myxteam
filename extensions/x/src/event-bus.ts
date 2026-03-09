@@ -2,8 +2,8 @@
  * Channel Event Bus
  *
  * Lightweight, typed event emitter for internal event routing within the
- * X channel plugin. Extracted from the swarm's MessageBus and simplified:
- * no agent IDs, no message headers, no TTLs — just topic → handler.
+ * X channel plugin. Simplified event bus with no agent IDs, no message
+ * headers, no TTLs — just topic → handler.
  *
  * Usage:
  *   const bus = new ChannelEventBus(log);

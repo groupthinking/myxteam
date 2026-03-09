@@ -12,7 +12,10 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "paths": {
+      "openclaw/plugin-sdk": ["../../src/plugin-sdk/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "index.ts"],
   "exclude": ["node_modules", "dist", "src/__tests__"]
