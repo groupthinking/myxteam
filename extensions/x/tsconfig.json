@@ -13,6 +13,7 @@
     "sourceMap": true,
     "outDir": "./dist",
     "rootDir": ".",
+    "baseUrl": ".",
     "paths": {
       "openclaw/plugin-sdk": ["../../src/plugin-sdk/index.ts"]
     }

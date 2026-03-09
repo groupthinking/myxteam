@@ -88,33 +88,27 @@ describe("token-refresh", () => {
       // expired past the 5-min buffer), which consumes one fetch call.
       await vi.advanceTimersByTimeAsync(7 * 60 * 1000); // 7 minutes
 
-      // The scheduled refresh already ran; reset and set up a fresh mock
-      // so we can verify the manual getValidAccessToken call independently.
-      const scheduledCalls = mockFetch.mock.calls.length;
+      // Capture the scheduled-refresh call before clearing so we can
+      // assert on its shape (URL, method, headers, body).
+      const scheduledCall = mockFetch.mock.calls[0] as [string, RequestInit];
       mockFetch.mockClear();
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          access_token: "new-access",
-          refresh_token: "new-refresh",
-          expires_in: 7200,
-          token_type: "bearer",
-        }),
-      });
 
       // The scheduled refresh already updated the cache, so
       // getValidAccessToken should return the cached token without
-      // making another fetch — unless the token is still expired.
+      // making another network call.
       const token = await getValidAccessToken("agent-1", TEST_CONFIG);
       expect(token).toBe("new-access");
 
-      // Verify: either the scheduled refresh already refreshed (0 new calls)
-      // or exactly 1 new call was made by getValidAccessToken.
-      expect(mockFetch.mock.calls.length + scheduledCalls).toBeGreaterThanOrEqual(1);
+      // The cached token was returned — no additional fetch needed.
+      expect(mockFetch).not.toHaveBeenCalled();
 
-      // Verify the very first refresh request (from the scheduled timer)
-      // was made correctly — check the calls that happened before mockClear.
-      // Since we cleared, we verify the overall flow succeeded.
+      // Verify the scheduled refresh request was formed correctly.
+      const [url, opts] = scheduledCall;
+      expect(url).toBe("https://api.x.com/2/oauth2/token");
+      expect(opts.method).toBe("POST");
+      expect(opts.headers).toHaveProperty("Authorization");
+      expect(opts.body).toContain("grant_type=refresh_token");
+      expect(opts.body).toContain("refresh_token=old-refresh");
     });
 
     it("should throw when refresh fails", async () => {

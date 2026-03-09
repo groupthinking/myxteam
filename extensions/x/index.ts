@@ -3,11 +3,25 @@ import { xPlugin } from "./src/channel.js";
 import { XChannelConfigSchema } from "./src/config-schema.js";
 import { setXRuntime } from "./src/runtime.js";
 
+/**
+ * Wrap the Zod schema in the OpenClawPluginConfigSchema interface so the
+ * runtime can call safeParse/parse for validation and generate JSON Schema
+ * for the UI config tooling.
+ */
+const xConfigSchema = {
+  safeParse: (value: unknown) => XChannelConfigSchema.safeParse(value),
+  parse: (value: unknown) => XChannelConfigSchema.parse(value),
+  jsonSchema: XChannelConfigSchema.toJSONSchema({
+    target: "draft-07",
+    unrepresentable: "any",
+  }) as Record<string, unknown>,
+};
+
 const plugin = {
   id: "x",
   name: "X (Twitter)",
   description: "OpenClaw X channel plugin for mention-driven AI agent interactions",
-  configSchema: XChannelConfigSchema as unknown as Record<string, unknown>,
+  configSchema: xConfigSchema,
 
   register(api: OpenClawPluginApi) {
     // Store the runtime reference so the channel can dispatch inbound messages

@@ -171,8 +171,13 @@ export const xPlugin: ChannelPlugin<ResolvedXAccount> = {
           const xCfg = (cfg.channels as Record<string, unknown> | undefined)?.x as
             | Record<string, unknown>
             | undefined;
-          const usageCheckIntervalMinutes =
-            (xCfg?.usageCheckIntervalMinutes as number | undefined) ?? 60;
+          const rawIntervalMinutes = xCfg?.usageCheckIntervalMinutes as number | undefined;
+          // Clamp to a minimum of 1 minute to prevent setInterval spinning at 0 ms
+          // if the user supplies 0, a negative value, or NaN.
+          const usageCheckIntervalMinutes = Math.max(
+            1,
+            Number.isFinite(rawIntervalMinutes as number) ? (rawIntervalMinutes as number) : 60,
+          );
           await initCreditBudget({
             budget: creditBudget,
             bearerToken,
