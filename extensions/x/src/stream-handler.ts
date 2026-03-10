@@ -198,28 +198,44 @@ async function syncStreamRules(
   };
   const existingRules = existingData.data ?? [];
 
-  // Build desired rule set
+  // Build desired rule set using the shared buildStreamRules helper so that
+  // the -from:<username> self-exclusion operator is applied consistently.
   const desiredRules = new Map<string, string>();
-  for (const username of agentUsernames) {
-    const tag = `agent:${username.toLowerCase()}`;
-    const value = `@${username}`;
-    desiredRules.set(tag, value);
+  for (const rule of buildStreamRules(agentUsernames)) {
+    desiredRules.set(rule.tag, rule.value);
   }
 
-  // Determine rules to delete (exist but not desired)
+  // Determine rules to delete: stale agent rules (tag not in desired set) OR
+  // rules whose value has changed (e.g. old `@milkxxman` → new `@milkxxman -from:milkxxman`).
   const rulesToDelete: string[] = [];
   for (const rule of existingRules) {
     const tag = rule.tag ?? "";
-    if (tag.startsWith("agent:") && !desiredRules.has(tag)) {
+    if (!tag.startsWith("agent:")) continue;
+    const desiredValue = desiredRules.get(tag);
+    if (desiredValue === undefined) {
+      // Tag no longer desired — delete it.
+      rulesToDelete.push(rule.id);
+    } else if (rule.value !== desiredValue) {
+      // Tag exists but value changed (e.g. -from: operator was added) — delete
+      // so it can be re-created with the correct value.
       rulesToDelete.push(rule.id);
     }
   }
 
-  // Determine rules to add (desired but don't exist)
-  const existingTags = new Set(existingRules.map((r) => r.tag ?? ""));
+  // Build the set of tags that already exist with the correct value.
+  const existingCorrectTags = new Set(
+    existingRules
+      .filter((r) => {
+        const tag = r.tag ?? "";
+        return tag.startsWith("agent:") && desiredRules.get(tag) === r.value;
+      })
+      .map((r) => r.tag ?? ""),
+  );
+
+  // Determine rules to add (desired but don't exist with the correct value).
   const rulesToAdd: Array<{ value: string; tag: string }> = [];
   for (const [tag, value] of desiredRules) {
-    if (!existingTags.has(tag)) {
+    if (!existingCorrectTags.has(tag)) {
       rulesToAdd.push({ value, tag });
     }
   }
@@ -403,16 +419,23 @@ async function processStream(
  * Each rule uses `-from:<username>` to exclude the agent's own posts from the
  * stream. Without this, the agent's own reply tweets (which contain @mentions
  * in their text) would match the rule and cause duplicate dispatch loops.
+ *
+ * Usernames are normalized (trimmed, leading `@` stripped) before use so that
+ * a config value like `@milkxxman` doesn't produce an invalid rule `@@milkxxman`.
  */
 export function buildStreamRules(
   agentUsernames: string[],
 ): Array<{ value: string; tag: string }> {
-  return agentUsernames.map((username) => ({
-    // Match mentions of this agent, but exclude posts FROM the agent itself.
-    // This prevents the agent's own replies from re-triggering the handler.
-    value: `@${username} -from:${username}`,
-    tag: `agent:${username}`,
-  }));
+  return agentUsernames.map((raw) => {
+    // Normalize: trim whitespace and strip any leading '@'
+    const username = raw.trim().replace(/^@/, "");
+    return {
+      // Match mentions of this agent, but exclude posts FROM the agent itself.
+      // This prevents the agent's own replies from re-triggering the handler.
+      value: `@${username} -from:${username}`,
+      tag: `agent:${username.toLowerCase()}`,
+    };
+  });
 }
 
 /**
