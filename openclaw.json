@@ -25,7 +25,7 @@
       "useSmartReply": true,
       "smartReply": {
         "apiKey": "${XAI_API_KEY}",
-        "model": "grok-2",
+        "model": "grok-4-fast-non-reasoning",
         "baseUrl": "https://api.x.ai/v1",
         "temperature": 0.2,
         "maxTokens": 200,
