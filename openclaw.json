@@ -1,0 +1,35 @@
+{
+  "env": {
+    "vars": {}
+  },
+  "channels": {
+    "x": {
+      "enabled": true,
+      "bearerToken": "${X_BEARER_TOKEN}",
+      "clientId": "${X_CLIENT_ID}",
+      "clientSecret": "${X_CLIENT_SECRET}",
+      "oauth1ConsumerKey": "${X_CONSUMER_KEY}",
+      "oauth1ConsumerSecret": "${X_CONSUMER_SECRET}",
+      "creditBudget": 10000,
+      "usageCheckIntervalMinutes": 60,
+      "useSmartReply": true,
+      "smartReply": {
+        "apiKey": "${XAI_API_KEY}",
+        "model": "grok-2",
+        "baseUrl": "https://api.x.ai/v1",
+        "temperature": 0.2,
+        "maxTokens": 200,
+        "confidenceThreshold": 0.5
+      },
+      "accounts": {
+        "milkxxman": {
+          "enabled": true,
+          "agentUsername": "milkxxman",
+          "name": "Milk-Run Agent",
+          "oauth1AccessToken": "${X_ACCESS_TOKEN}",
+          "oauth1AccessTokenSecret": "${X_ACCESS_TOKEN_SECRET}"
+        }
+      }
+    }
+  }
+}
