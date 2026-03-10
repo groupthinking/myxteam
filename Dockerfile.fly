@@ -6,6 +6,9 @@ ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable
 
+# Install gosu for privilege dropping in entrypoint
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
@@ -42,8 +45,7 @@ RUN mkdir -p /data && chown node:node /data
 COPY fly-entrypoint.sh /app/fly-entrypoint.sh
 RUN chmod +x /app/fly-entrypoint.sh
 
-# Security hardening: Run as non-root user
-USER node
-
+# Run as root so the entrypoint can fix volume permissions, then drop to node via gosu
+# ENTRYPOINT will exec as node user after fixing permissions
 ENTRYPOINT ["/app/fly-entrypoint.sh"]
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+CMD ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--port", "3000", "--bind", "lan"]
