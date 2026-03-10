@@ -42,13 +42,33 @@
       }
     }
   },
+  "tools": {
+    "alsoAllow": ["group:web"],
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "brave",
+        "apiKey": "${BRAVE_API_KEY}",
+        "maxResults": 5,
+        "timeoutSeconds": 30,
+        "cacheTtlMinutes": 15
+      },
+      "fetch": {
+        "enabled": true,
+        "maxChars": 50000,
+        "timeoutSeconds": 30,
+        "cacheTtlMinutes": 15
+      }
+    }
+  },
   "agents": {
     "defaults": {
       "model": {
         "primary": "xai/grok-4"
       },
       "workspace": "/data/workspace",
-      "skipBootstrap": true
+      "skipBootstrap": true,
+      "userTimezone": "UTC"
     }
   },
   "channels": {
