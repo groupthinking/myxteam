@@ -14,6 +14,7 @@
  */
 
 import type { ChannelLogSink, ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
 import { XChannelConfigSchema } from "./config-schema.js";
 import {
   initCreditBudget,
@@ -517,22 +518,21 @@ async function persistRefreshedTokens(
 
 // ─── Inbound Message Handler ─────────────────────────────────────────────────
 
+const CHANNEL_ID = "x" as const;
+
 /**
  * Handle an incoming mention from the Filtered Stream.
  *
  * Routes the mention to the correct agent based on the matching rules,
- * then dispatches it into OpenClaw's inbound message pipeline via the
- * runtime.channel.reply.handleInboundMessage() method.
+ * then dispatches it into OpenClaw's inbound message pipeline using the
+ * proper three-step pattern:
+ *   1. resolveAgentRoute — determine which agent handles this mention
+ *   2. finalizeInboundContext — build the normalized context payload
+ *   3. dispatchReplyWithBufferedBlockDispatcher — run the agent and deliver reply
  *
  * When the smart-reply pipeline is active, the mention is classified once
  * (before iterating rules) to avoid redundant LLM calls when a post matches
- * multiple agent rules. The routing decision determines whether the mention is
- * forwarded to OpenClaw (reply), silently dropped (ignore), or forwarded with
- * escalation metadata attached (escalate). The classification result is passed
- * as `metadata.smartReply` in the inbound message payload so downstream
- * handlers can inspect intent/sentiment or apply different behaviour.
- *
- * This follows the exact same pattern as the nostr plugin's onMessage callback.
+ * multiple agent rules.
  */
 async function handleIncomingMention(
   post: StreamPost,
@@ -542,11 +542,6 @@ async function handleIncomingMention(
   const runtime = getXRuntime();
 
   // ── Smart Reply Classification (once per post, before the rule loop) ────
-  //
-  // Classifying inside the loop would trigger one LLM call per matching rule.
-  // A post that matches multiple agent rules (e.g. mentions two agents) would
-  // incur redundant cost and could produce inconsistent routing decisions.
-  // We classify once here and reuse the result for every matching rule below.
   let smartReplyClassification: import("./smart-reply.js").ClassificationResult | null = null;
 
   if (smartReplyPipeline) {
@@ -581,8 +576,9 @@ async function handleIncomingMention(
       continue;
     }
 
+    const senderLabel = post.authorUsername ? `@${post.authorUsername}` : post.authorId;
     log?.info?.(
-      `[${account.accountId}] Mention from @${post.authorUsername ?? post.authorId}: "${post.text.slice(0, 80)}..."`,
+      `[${account.accountId}] Mention from ${senderLabel}: "${post.text.slice(0, 80)}..."`,
     );
 
     if (smartReplyClassification?.route === "escalate") {
@@ -592,58 +588,133 @@ async function handleIncomingMention(
       );
     }
 
-    // Dispatch to OpenClaw's message pipeline.
-    // This follows the exact same pattern as the nostr plugin.
     try {
-      await (
-        runtime.channel.reply as {
-          handleInboundMessage?: (params: unknown) => Promise<void>;
-        }
-      ).handleInboundMessage?.({
-        channel: "x",
+      // ── Step 1: Resolve the agent route ──────────────────────────────────
+      const route = runtime.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: CHANNEL_ID,
         accountId: account.accountId,
-        senderId: post.authorId,
-        senderUsername: post.authorUsername,
-        chatType: "thread",
-        chatId: post.conversationId ?? post.id,
-        text: post.text,
-        replyToId: post.id,
-        // Pass smart-reply classification as metadata so downstream handlers
-        // can inspect the routing decision (e.g. to apply a different tone for
-        // escalated mentions, or to log intent/sentiment for analytics).
-        ...(smartReplyClassification ? { metadata: { smartReply: smartReplyClassification } } : {}),
-        reply: async (responseText: string) => {
-          // Build the client with the correct auth mode for this account
-          // (mirrors the logic in outbound.sendText to avoid auth failures for OAuth 1.0a accounts)
-          const isOAuth1Reply =
-            account.authMode === "oauth1" &&
-            account.oauth1AccessToken &&
-            account.oauth1AccessTokenSecret &&
-            account.oauth1ConsumerKey &&
-            account.oauth1ConsumerSecret;
+        peer: {
+          kind: "direct",
+          id: post.authorId,
+        },
+      });
 
-          const replyClient = new XApiClient(
-            isOAuth1Reply
-              ? {
-                  authMode: "oauth1",
-                  oauth1Credentials: {
-                    consumerKey: account.oauth1ConsumerKey!,
-                    consumerSecret: account.oauth1ConsumerSecret!,
-                    accessToken: account.oauth1AccessToken!,
-                    accessTokenSecret: account.oauth1AccessTokenSecret!,
-                  },
-                  accountId: account.accountId,
-                }
-              : {
-                  authMode: "oauth2",
-                  accessToken: account.accessToken,
-                  accountId: account.accountId,
-                },
-          );
-          await replyClient.createPost({
-            text: responseText,
-            inReplyToPostId: post.id,
-          });
+      // ── Step 2: Build the context payload ────────────────────────────────
+      const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
+      const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
+        storePath,
+        sessionKey: route.sessionKey,
+      });
+      const rawBody = post.text.trim();
+      const body = runtime.channel.reply.formatAgentEnvelope({
+        channel: "X",
+        from: senderLabel,
+        timestamp: Date.now(),
+        previousTimestamp,
+        envelope: envelopeOptions,
+        body: rawBody,
+      });
+      const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+        Body: body,
+        RawBody: rawBody,
+        CommandBody: rawBody,
+        From: `x:${post.authorId}`,
+        To: `x:${account.agentUsername}`,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
+        ChatType: "thread",
+        ConversationLabel: senderLabel,
+        SenderName: post.authorUsername ?? undefined,
+        SenderId: post.authorId,
+        Provider: CHANNEL_ID,
+        Surface: CHANNEL_ID,
+        MessageSid: post.id,
+        Timestamp: Date.now(),
+        OriginatingChannel: CHANNEL_ID,
+        OriginatingTo: `x:${account.agentUsername}`,
+        // Pass smart-reply classification as extra context
+        ...(smartReplyClassification
+          ? {
+              SmartReplyRoute: smartReplyClassification.route,
+              SmartReplyReason: smartReplyClassification.reason,
+            }
+          : {}),
+      });
+
+      await runtime.channel.session.recordInboundSession({
+        storePath,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+        onRecordError: (err) => {
+          log?.error?.(`[${account.accountId}] Failed updating session meta: ${String(err)}`);
+        },
+      });
+
+      // ── Step 3: Build the reply client and dispatch ───────────────────────
+      const isOAuth1 =
+        account.authMode === "oauth1" &&
+        account.oauth1AccessToken &&
+        account.oauth1AccessTokenSecret &&
+        account.oauth1ConsumerKey &&
+        account.oauth1ConsumerSecret;
+
+      const replyClient = new XApiClient(
+        isOAuth1
+          ? {
+              authMode: "oauth1",
+              oauth1Credentials: {
+                consumerKey: account.oauth1ConsumerKey!,
+                consumerSecret: account.oauth1ConsumerSecret!,
+                accessToken: account.oauth1AccessToken!,
+                accessTokenSecret: account.oauth1AccessTokenSecret!,
+              },
+              accountId: account.accountId,
+              rateLimitEnabled: true,
+            }
+          : {
+              authMode: "oauth2",
+              accessToken: account.accessToken,
+              accountId: account.accountId,
+              rateLimitEnabled: true,
+            },
+      );
+
+      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        cfg,
+        agentId: route.agentId,
+        channel: CHANNEL_ID,
+        accountId: account.accountId,
+      });
+
+      await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg,
+        dispatcherOptions: {
+          ...prefixOptions,
+          deliver: async (payload) => {
+            const text = (payload as { text?: string }).text ?? "";
+            if (!text.trim()) return;
+            // Use thread-state to chain replies into a thread
+            const chatId = post.conversationId ?? post.id;
+            const effectiveReplyToId = resolveReplyToIdForChunk(chatId, post.id);
+            const result = await replyClient.createPost({
+              text,
+              inReplyToPostId: effectiveReplyToId,
+            });
+            if (result.ok && result.postId) {
+              recordPostedChunk(chatId, result.postId);
+            }
+          },
+          onError: (err, info) => {
+            log?.error?.(`[${account.accountId}] X ${info.kind} reply failed: ${String(err)}`);
+          },
+        },
+        replyOptions: {
+          onModelSelected,
         },
       });
     } catch (err) {
