@@ -1,0 +1,84 @@
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "controlUi": {
+      "allowInsecureAuth": true,
+      "dangerouslyDisableDeviceAuth": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "x": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "xai": {
+        "baseUrl": "https://api.x.ai/v1",
+        "api": "openai-completions",
+        "apiKey": "${XAI_API_KEY}",
+        "models": [
+          {
+            "id": "grok-4",
+            "name": "Grok 4",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "xai/grok-4"
+      },
+      "workspace": "/data/workspace",
+      "skipBootstrap": true
+    }
+  },
+  "channels": {
+    "x": {
+      "enabled": true,
+      "bearerToken": "${X_BEARER_TOKEN}",
+      "clientId": "${X_CLIENT_ID}",
+      "clientSecret": "${X_CLIENT_SECRET}",
+      "oauth1ConsumerKey": "${X_CONSUMER_KEY}",
+      "oauth1ConsumerSecret": "${X_CONSUMER_SECRET}",
+      "creditBudget": 10000,
+      "usageCheckIntervalMinutes": 60,
+      "useSmartReply": true,
+      "smartReply": {
+        "apiKey": "${XAI_API_KEY}",
+        "model": "grok-4-fast-non-reasoning",
+        "baseUrl": "https://api.x.ai/v1",
+        "temperature": 0.2,
+        "maxTokens": 200,
+        "confidenceThreshold": 0.5
+      },
+      "accounts": {
+        "milkxxman": {
+          "enabled": true,
+          "agentUsername": "milkxxman",
+          "name": "The Orchestrator",
+          "oauth1AccessToken": "${X_ACCESS_TOKEN}",
+          "oauth1AccessTokenSecret": "${X_ACCESS_TOKEN_SECRET}"
+        }
+      }
+    }
+  }
+}
