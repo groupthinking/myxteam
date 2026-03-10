@@ -558,6 +558,10 @@ async function handleIncomingMention(
     }
   }
 
+  // Deduplicate by agentUsername so a post matching multiple rules for the
+  // same agent (e.g. stale duplicate rules on the X API) is only dispatched once.
+  const handledAgents = new Set<string>();
+
   for (const rule of post.matchingRules) {
     // Rule tags are formatted as "agent:<username>"
     const match = rule.tag.match(/^agent:(.+)$/);
@@ -575,6 +579,30 @@ async function handleIncomingMention(
       log?.debug?.(`Received mention for disabled agent @${agentUsername}. Ignoring.`);
       continue;
     }
+
+    // Defense-in-depth: skip posts authored by the agent itself.
+    // The stream rule already uses `-from:<username>` to prevent this at the
+    // API level, but guard here too in case of stale rules or API edge cases.
+    if (
+      post.authorUsername &&
+      post.authorUsername.toLowerCase() === agentUsername.toLowerCase()
+    ) {
+      log?.debug?.(
+        `[${account.accountId}] Skipping self-post ${post.id} from @${post.authorUsername}.`,
+      );
+      continue;
+    }
+
+    // Skip if we already dispatched for this agent in this rule iteration
+    // (handles duplicate matching_rules entries for the same agent username).
+    const normalizedUsername = agentUsername.toLowerCase();
+    if (handledAgents.has(normalizedUsername)) {
+      log?.debug?.(
+        `[${account.accountId}] Skipping duplicate rule match for @${agentUsername} on post ${post.id}.`,
+      );
+      continue;
+    }
+    handledAgents.add(normalizedUsername);
 
     const senderLabel = post.authorUsername ? `@${post.authorUsername}` : post.authorId;
     log?.info?.(

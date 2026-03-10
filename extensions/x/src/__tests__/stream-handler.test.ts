@@ -15,15 +15,15 @@ import {
 
 describe("stream-handler", () => {
   describe("buildStreamRules", () => {
-    it("should build one rule per agent username", () => {
+    it("should build one rule per agent username with -from: self-exclusion", () => {
       const rules = buildStreamRules(["ResearchBot", "WriterBot"]);
       expect(rules).toHaveLength(2);
       expect(rules[0]).toEqual({
-        value: "@ResearchBot",
+        value: "@ResearchBot -from:ResearchBot",
         tag: "agent:ResearchBot",
       });
       expect(rules[1]).toEqual({
-        value: "@WriterBot",
+        value: "@WriterBot -from:WriterBot",
         tag: "agent:WriterBot",
       });
     });
@@ -33,10 +33,11 @@ describe("stream-handler", () => {
       expect(rules).toEqual([]);
     });
 
-    it("should handle single username", () => {
+    it("should handle single username and exclude self-posts", () => {
       const rules = buildStreamRules(["SingleAgent"]);
       expect(rules).toHaveLength(1);
       expect(rules[0]!.tag).toBe("agent:SingleAgent");
+      expect(rules[0]!.value).toBe("@SingleAgent -from:SingleAgent");
     });
   });
 
