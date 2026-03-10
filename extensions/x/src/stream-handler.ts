@@ -399,12 +399,18 @@ async function processStream(
 /**
  * Build the desired stream rules from a list of agent usernames.
  * Exported for testing.
+ *
+ * Each rule uses `-from:<username>` to exclude the agent's own posts from the
+ * stream. Without this, the agent's own reply tweets (which contain @mentions
+ * in their text) would match the rule and cause duplicate dispatch loops.
  */
 export function buildStreamRules(
   agentUsernames: string[],
 ): Array<{ value: string; tag: string }> {
   return agentUsernames.map((username) => ({
-    value: `@${username}`,
+    // Match mentions of this agent, but exclude posts FROM the agent itself.
+    // This prevents the agent's own replies from re-triggering the handler.
+    value: `@${username} -from:${username}`,
     tag: `agent:${username}`,
   }));
 }
