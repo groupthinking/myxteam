@@ -32,6 +32,7 @@ import {
   getStreamStatus,
   type StreamPost,
 } from "./stream-handler.js";
+import { stripLeadingContextJsonBlock } from "./strip-context-json.js";
 import {
   resolveReplyToIdForChunk,
   recordPostedChunk,
@@ -51,9 +52,9 @@ import {
   getAllAgentUsernames,
   findAccountByUsername,
   resolveSmartReplyConfig,
+  resolveCreditBudget,
   type ResolvedXAccount,
 } from "./types.js";
-import { resolveCreditBudget } from "./types.js";
 import { XApiClient } from "./x-api-client.js";
 
 // ─── Module State ────────────────────────────────────────────────────────────
@@ -520,6 +521,9 @@ async function persistRefreshedTokens(
 
 const CHANNEL_ID = "x" as const;
 
+// stripLeadingContextJsonBlock is in its own module for clean testability.
+// See strip-context-json.ts for implementation details and the full label allowlist.
+
 /**
  * Handle an incoming mention from the Filtered Stream.
  *
@@ -583,10 +587,7 @@ async function handleIncomingMention(
     // Defense-in-depth: skip posts authored by the agent itself.
     // The stream rule already uses `-from:<username>` to prevent this at the
     // API level, but guard here too in case of stale rules or API edge cases.
-    if (
-      post.authorUsername &&
-      post.authorUsername.toLowerCase() === agentUsername.toLowerCase()
-    ) {
+    if (post.authorUsername && post.authorUsername.toLowerCase() === agentUsername.toLowerCase()) {
       log?.debug?.(
         `[${account.accountId}] Skipping self-post ${post.id} from @${post.authorUsername}.`,
       );
@@ -654,8 +655,15 @@ async function handleIncomingMention(
         To: `x:${account.agentUsername}`,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
-        ChatType: "thread",
-        ConversationLabel: senderLabel,
+        // Use "direct" so resolveConversationLabel() takes the direct path and uses
+        // SenderName (e.g. "MyXStack") rather than falling back to the raw From field
+        // (e.g. "x:<authorId>") for session metadata labels.
+        ChatType: "direct",
+        // Do NOT set ConversationLabel here. Setting it causes buildInboundUserContextPrefix
+        // to emit a JSON block ({ "conversation_label": "@sender" }) that gets prepended to
+        // the user message body. The model then echoes this block back in its reply, which
+        // bleeds into the outbound tweet text. The sender is already present in the formatted
+        // envelope body ("from: @sender"), so ConversationLabel is redundant for X mentions.
         SenderName: post.authorUsername ?? undefined,
         SenderId: post.authorId,
         Provider: CHANNEL_ID,
@@ -724,7 +732,12 @@ async function handleIncomingMention(
         dispatcherOptions: {
           ...prefixOptions,
           deliver: async (payload) => {
-            const text = (payload as { text?: string }).text ?? "";
+            const rawText = (payload as { text?: string }).text ?? "";
+            // Safety-net: strip any leading OpenClaw context JSON blocks that the model
+            // may have echoed back (e.g. ```json\n{ "conversation_label": ... }\n```).
+            // These are injected as user-role context prefixes and should never appear
+            // in outbound tweet text.
+            const text = stripLeadingContextJsonBlock(rawText);
             if (!text.trim()) return;
             // Use thread-state to chain replies into a thread
             const chatId = post.conversationId ?? post.id;
