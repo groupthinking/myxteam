@@ -33,8 +33,15 @@ chown node:node "$CONFIG_FILE"
 # Step 3: Sync the SOUL.md persona file into the agent workspace.
 # SOUL.md defines the @milkxxman "Orchestrator" persona and is loaded
 # as a bootstrap context file by the agent system prompt builder.
-echo "[fly-entrypoint] Syncing SOUL.md to $WORKSPACE_DIR ..."
-cp /app/milkxxman-soul.md "$WORKSPACE_DIR/SOUL.md"
+# We prepend a dynamic "Today's date" line so the agent always knows the
+# current date without needing to call session_status.
+CURRENT_DATE=$(LC_ALL=C date -u '+%B %d, %Y')  # locale-stable UTC date, e.g. "March 10, 2026"
+echo "[fly-entrypoint] Syncing SOUL.md to $WORKSPACE_DIR (date: $CURRENT_DATE) ..."
+{
+  printf '<!-- auto-generated on deploy: do not edit manually -->\n'
+  printf 'Today'"'"'s date: %s (UTC)\n\n' "$CURRENT_DATE"
+  cat /app/milkxxman-soul.md
+} > "$WORKSPACE_DIR/SOUL.md"
 chown node:node "$WORKSPACE_DIR/SOUL.md"
 
 # Note: The xAI API key is injected via models.providers.xai.apiKey in openclaw.json
