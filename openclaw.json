@@ -16,6 +16,13 @@
       }
     }
   },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "xai/grok-4-fast-non-reasoning"
+      }
+    }
+  },
   "channels": {
     "x": {
       "enabled": true,
