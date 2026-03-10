@@ -37,9 +37,14 @@ ENV NODE_ENV=production
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
 
-# Create the persistent data directory so the entrypoint can write to it
-# even before the Fly volume is mounted (fallback for local testing).
-RUN mkdir -p /data && chown node:node /data
+# Create the persistent data directory and all required subdirectories so the
+# entrypoint can write to them even before the Fly volume is mounted.
+# This fixes EACCES errors for /data/identity/device.json and other paths.
+RUN mkdir -p /data/identity /data/workspace /data/sessions /data/logs \
+    && chown -R node:node /data
+
+# Copy the SOUL.md persona file (synced to workspace by entrypoint)
+COPY milkxxman-soul.md /app/milkxxman-soul.md
 
 # Copy the entrypoint script and make it executable
 COPY fly-entrypoint.sh /app/fly-entrypoint.sh

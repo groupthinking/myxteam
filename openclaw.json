@@ -46,7 +46,9 @@
     "defaults": {
       "model": {
         "primary": "xai/grok-4"
-      }
+      },
+      "workspace": "/data/workspace",
+      "skipBootstrap": true
     }
   },
   "channels": {
@@ -72,7 +74,7 @@
         "milkxxman": {
           "enabled": true,
           "agentUsername": "milkxxman",
-          "name": "Milk-Run Agent",
+          "name": "The Orchestrator",
           "oauth1AccessToken": "${X_ACCESS_TOKEN}",
           "oauth1AccessTokenSecret": "${X_ACCESS_TOKEN_SECRET}"
         }
