@@ -35,7 +35,7 @@ chown node:node "$CONFIG_FILE"
 # as a bootstrap context file by the agent system prompt builder.
 # We prepend a dynamic "Today's date" line so the agent always knows the
 # current date without needing to call session_status.
-CURRENT_DATE=$(date -u '+%B %d, %Y')  # e.g. "March 10, 2026"
+CURRENT_DATE=$(LC_ALL=C date -u '+%B %d, %Y')  # locale-stable UTC date, e.g. "March 10, 2026"
 echo "[fly-entrypoint] Syncing SOUL.md to $WORKSPACE_DIR (date: $CURRENT_DATE) ..."
 {
   printf '<!-- auto-generated on deploy: do not edit manually -->\n'
