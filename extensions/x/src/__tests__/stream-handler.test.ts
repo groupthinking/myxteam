@@ -20,11 +20,11 @@ describe("stream-handler", () => {
       expect(rules).toHaveLength(2);
       expect(rules[0]).toEqual({
         value: "@ResearchBot -from:ResearchBot",
-        tag: "agent:ResearchBot",
+        tag: "agent:researchbot",
       });
       expect(rules[1]).toEqual({
         value: "@WriterBot -from:WriterBot",
-        tag: "agent:WriterBot",
+        tag: "agent:writerbot",
       });
     });
 
@@ -36,7 +36,7 @@ describe("stream-handler", () => {
     it("should handle single username and exclude self-posts", () => {
       const rules = buildStreamRules(["SingleAgent"]);
       expect(rules).toHaveLength(1);
-      expect(rules[0]!.tag).toBe("agent:SingleAgent");
+      expect(rules[0]!.tag).toBe("agent:singleagent");
       expect(rules[0]!.value).toBe("@SingleAgent -from:SingleAgent");
     });
   });
