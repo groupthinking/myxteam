@@ -1,6 +1,16 @@
 {
-  "env": {
-    "vars": {}
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "x": {
+        "enabled": true
+      }
+    }
   },
   "channels": {
     "x": {
