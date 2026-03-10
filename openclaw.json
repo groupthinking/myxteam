@@ -16,6 +16,13 @@
       }
     }
   },
+  "models": {
+    "providers": {
+      "xai": {
+        "apiKey": "${XAI_API_KEY}"
+      }
+    }
+  },
   "agents": {
     "defaults": {
       "model": {
