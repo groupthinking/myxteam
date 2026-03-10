@@ -521,6 +521,45 @@ async function persistRefreshedTokens(
 const CHANNEL_ID = "x" as const;
 
 /**
+ * Strip any leading OpenClaw context JSON block from outbound tweet text.
+ *
+ * OpenClaw prepends structured context blocks (e.g. "Conversation info (untrusted metadata):
+ * ```json\n{ \"conversation_label\": \"@sender\" }\n```") to the user-role message body so the
+ * model has structured context. If the model echoes this block back as part of its response,
+ * it would appear verbatim in the tweet. This function strips any such leading block.
+ *
+ * The pattern matched is:
+ *   [optional label line]\n```json\n{...}\n```\n[rest of reply]
+ *
+ * This is a safety-net; the root fix is to not set ConversationLabel for X direct mentions.
+ *
+ * Known OpenClaw context block label prefixes (from inbound-meta.ts).
+ * These are the only label lines that should precede a strippable JSON block.
+ */
+const OPENCLAW_CONTEXT_LABEL_RE =
+  /^(?:Conversation info \(untrusted metadata\)|Thread starter \(untrusted, for context\)|Replied message \(untrusted, for context\)|Chat history since last reply \(untrusted, for context\)):\s*\n/;
+
+function stripLeadingContextJsonBlock(text: string): string {
+  const trimmed = text.trimStart();
+  // Case 1: bare ```json block at the very start (no label line)
+  const BARE_JSON_BLOCK_RE = /^```json\s*\n\{[\s\S]*?\}\s*\n```\s*\n?/;
+  const bareMatch = BARE_JSON_BLOCK_RE.exec(trimmed);
+  if (bareMatch) {
+    return trimmed.slice(bareMatch[0].length).trimStart();
+  }
+  // Case 2: known OpenClaw label line followed by a ```json block
+  const labelMatch = OPENCLAW_CONTEXT_LABEL_RE.exec(trimmed);
+  if (labelMatch) {
+    const afterLabel = trimmed.slice(labelMatch[0].length);
+    const labeledJsonMatch = BARE_JSON_BLOCK_RE.exec(afterLabel);
+    if (labeledJsonMatch) {
+      return afterLabel.slice(labeledJsonMatch[0].length).trimStart();
+    }
+  }
+  return text;
+}
+
+/**
  * Handle an incoming mention from the Filtered Stream.
  *
  * Routes the mention to the correct agent based on the matching rules,
@@ -655,7 +694,11 @@ async function handleIncomingMention(
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: "thread",
-        ConversationLabel: senderLabel,
+        // Do NOT set ConversationLabel here. Setting it causes buildInboundUserContextPrefix
+        // to emit a JSON block ({ "conversation_label": "@sender" }) that gets prepended to
+        // the user message body. The model then echoes this block back in its reply, which
+        // bleeds into the outbound tweet text. The sender is already present in the formatted
+        // envelope body ("from: @sender"), so ConversationLabel is redundant for X mentions.
         SenderName: post.authorUsername ?? undefined,
         SenderId: post.authorId,
         Provider: CHANNEL_ID,
@@ -724,7 +767,12 @@ async function handleIncomingMention(
         dispatcherOptions: {
           ...prefixOptions,
           deliver: async (payload) => {
-            const text = (payload as { text?: string }).text ?? "";
+            const rawText = (payload as { text?: string }).text ?? "";
+            // Safety-net: strip any leading OpenClaw context JSON blocks that the model
+            // may have echoed back (e.g. ```json\n{ "conversation_label": ... }\n```).
+            // These are injected as user-role context prefixes and should never appear
+            // in outbound tweet text.
+            const text = stripLeadingContextJsonBlock(rawText);
             if (!text.trim()) return;
             // Use thread-state to chain replies into a thread
             const chatId = post.conversationId ?? post.id;
