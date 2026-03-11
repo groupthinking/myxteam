@@ -59,8 +59,10 @@ fi
 if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
   printf "%s" "$LATEST_VERSION" > "${OPENCLAW_INSTALL_LATEST_OUT:-}"
 fi
-INSTALLED_VERSION="$("$CLI_NAME" --version 2>/dev/null | head -n 1 | tr -d '\r')"
-echo "cli=$CLI_NAME installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
+# Extract version from output like "OpenClaw 2026.3.8 (3caab92)" or "2026.3.8"
+INSTALLED_VERSION_RAW="$("$CLI_NAME" --version 2>/dev/null | head -n 1 | tr -d '\r')"
+INSTALLED_VERSION="$(echo "$INSTALLED_VERSION_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?')"
+echo "cli=$CLI_NAME installed=$INSTALLED_VERSION (raw: $INSTALLED_VERSION_RAW) expected=$LATEST_VERSION"
 
 if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then
   echo "ERROR: expected ${CLI_NAME}@${LATEST_VERSION}, got ${CLI_NAME}@${INSTALLED_VERSION}" >&2

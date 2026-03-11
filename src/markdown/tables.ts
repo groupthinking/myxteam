@@ -8,6 +8,7 @@ const MARKDOWN_STYLE_MARKERS = {
   strikethrough: { open: "~~", close: "~~" },
   code: { open: "`", close: "`" },
   code_block: { open: "```\n", close: "```" },
+  spoiler: { open: "||", close: "||" },
 } as const;
 
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
@@ -20,6 +21,7 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
     headingStyle: "none",
     blockquotePrefix: "",
     tableMode: mode,
+    enableSpoilers: true,
   });
   if (!hasTables) {
     return markdown;
