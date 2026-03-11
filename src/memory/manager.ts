@@ -691,14 +691,16 @@ export class MemoryIndexManager implements MemorySearchManager {
     }
   }
 
-  private buildSourceFilter(alias?: string): { sql: string; params: MemorySource[] } {
+  private buildSourceFilter(alias?: string): { sql: string; params: string[] } {
     const sources = Array.from(this.sources);
     if (sources.length === 0) {
       return { sql: "", params: [] };
     }
     const column = alias ? `${alias}.source` : "source";
-    const placeholders = sources.map(() => "?").join(", ");
-    return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
+    return {
+      sql: ` AND ${column} IN (SELECT value FROM json_each(?))`,
+      params: [JSON.stringify(sources)],
+    };
   }
 
   private openDatabase(): DatabaseSync {
