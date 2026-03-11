@@ -470,6 +470,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       return;
     }
 
+    subscribedChannels.add(channelNest);
     try {
       await api!.subscribe({
         app: "channels",
@@ -485,9 +486,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           subscribedChannels.delete(channelNest);
         },
       });
-      subscribedChannels.add(channelNest);
       runtime.log?.(`[tlon] Subscribed to group channel: ${channelNest}`);
     } catch (error) {
+      subscribedChannels.delete(channelNest);
       runtime.error?.(`[tlon] Failed to subscribe to ${channelNest}: ${formatError(error)}`);
     }
   }
@@ -496,6 +497,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     if (subscribedDMs.has(dmShip)) {
       return;
     }
+    subscribedDMs.add(dmShip);
     try {
       await api!.subscribe({
         app: "chat",
@@ -511,9 +513,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           subscribedDMs.delete(dmShip);
         },
       });
-      subscribedDMs.add(dmShip);
       runtime.log?.(`[tlon] Subscribed to DM with ${dmShip}`);
     } catch (error) {
+      subscribedDMs.delete(dmShip);
       runtime.error?.(`[tlon] Failed to subscribe to DM with ${dmShip}: ${formatError(error)}`);
     }
   }
@@ -522,16 +524,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     try {
       const dmShips = await api!.scry("/chat/dm.json");
       if (Array.isArray(dmShips)) {
-        for (const dmShip of dmShips) {
-          await subscribeToDM(dmShip);
-        }
+        await Promise.all(dmShips.map((dmShip) => subscribeToDM(dmShip)));
       }
 
       if (account.autoDiscoverChannels !== false) {
         const discoveredChannels = await fetchAllChannels(api!, runtime);
-        for (const channelNest of discoveredChannels) {
-          await subscribeToChannel(channelNest);
-        }
+        await Promise.all(discoveredChannels.map((channelNest) => subscribeToChannel(channelNest)));
       }
     } catch (error) {
       runtime.error?.(`[tlon] Channel refresh failed: ${formatError(error)}`);
@@ -552,13 +550,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.error?.(`[tlon] Failed to fetch DM list: ${formatError(error)}`);
     }
 
-    for (const dmShip of dmShips) {
-      await subscribeToDM(dmShip);
-    }
-
-    for (const channelNest of groupChannels) {
-      await subscribeToChannel(channelNest);
-    }
+    await Promise.all([
+      ...dmShips.map((dmShip) => subscribeToDM(dmShip)),
+      ...groupChannels.map((channelNest) => subscribeToChannel(channelNest)),
+    ]);
 
     runtime.log?.("[tlon] All subscriptions registered, connecting to SSE stream...");
     await api.connect();
