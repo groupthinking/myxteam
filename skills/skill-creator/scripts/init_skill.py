@@ -119,10 +119,42 @@ Example real scripts from other skills:
 - pdf/scripts/convert_pdf_to_images.py - Converts PDF pages to images
 """
 
-def main():
-    print("This is an example script for {skill_name}")
+import argparse
+import sys
+
+
+def process_data(input_path, output_path):
+    """
+    Placeholder for actual script logic.
+    This could be data processing, file conversion, API calls, etc.
+    """
+    print(f"Processing data from {{input_path}} to {{output_path}}...")
     # TODO: Add actual script logic here
-    # This could be data processing, file conversion, API calls, etc.
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Example helper script for {skill_name}")
+    parser.add_argument("--input", help="Path to input file")
+    parser.add_argument("--output", help="Path to output file")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+
+    args = parser.parse_args()
+
+    if not args.input:
+        print("Error: --input is required")
+        parser.print_help()
+        sys.exit(1)
+
+    success = process_data(args.input, args.output)
+
+    if success:
+        print("Successfully processed data.")
+        sys.exit(0)
+    else:
+        print("Failed to process data.")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
