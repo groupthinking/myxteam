@@ -122,12 +122,36 @@ export async function resolveSlackUserAllowlist(params: {
 }): Promise<SlackUserResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
   const users = await listSlackUsers(client);
+
+  const userById = new Map<string, SlackUserLookup>();
+  const usersByEmail = new Map<string, SlackUserLookup[]>();
+  const usersByName = new Map<string, SlackUserLookup[]>();
+
+  for (const user of users) {
+    userById.set(user.id, user);
+    if (user.email) {
+      const list = usersByEmail.get(user.email) ?? [];
+      list.push(user);
+      usersByEmail.set(user.email, list);
+    }
+    const candidates = new Set(
+      [user.name, user.displayName, user.realName]
+        .map((value) => value?.toLowerCase())
+        .filter(Boolean) as string[],
+    );
+    for (const name of candidates) {
+      const list = usersByName.get(name) ?? [];
+      list.push(user);
+      usersByName.set(name, list);
+    }
+  }
+
   const results: SlackUserResolution[] = [];
 
   for (const input of params.entries) {
     const parsed = parseSlackUserInput(input);
     if (parsed.id) {
-      const match = users.find((user) => user.id === parsed.id);
+      const match = userById.get(parsed.id);
       results.push({
         input,
         resolved: true,
@@ -140,7 +164,7 @@ export async function resolveSlackUserAllowlist(params: {
       continue;
     }
     if (parsed.email) {
-      const matches = users.filter((user) => user.email === parsed.email);
+      const matches = usersByEmail.get(parsed.email) ?? [];
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
@@ -161,12 +185,7 @@ export async function resolveSlackUserAllowlist(params: {
     }
     if (parsed.name) {
       const target = parsed.name.toLowerCase();
-      const matches = users.filter((user) => {
-        const candidates = [user.name, user.displayName, user.realName]
-          .map((value) => value?.toLowerCase())
-          .filter(Boolean) as string[];
-        return candidates.includes(target);
-      });
+      const matches = usersByName.get(target) ?? [];
       if (matches.length > 0) {
         const scored = matches
           .map((user) => ({ user, score: scoreSlackUser(user, parsed) }))
