@@ -283,34 +283,35 @@ export async function evaluateViaPlaywright(opts: {
   try {
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-      const elementEvaluator = new Function(
-        "el",
-        "args",
-        `
-        "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
-        try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate(el) : candidate;
-          if (result && typeof result.then === "function") {
-            return Promise.race([
-              result,
-              new Promise(function(_, reject) {
-                setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
-              })
-            ]);
+      const evalPromise = locator.evaluate(
+        (el, args) => {
+          const { fnBody, timeoutMs } = args;
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval
+            const candidate = new Function(`return (${fnBody})`)();
+            const result = typeof candidate === "function" ? candidate(el) : candidate;
+            if (result && typeof result.then === "function") {
+              return Promise.race([
+                result,
+                new Promise((_, reject) => {
+                  setTimeout(() => {
+                    reject(new Error(`evaluate timed out after ${timeoutMs}ms`));
+                  }, timeoutMs);
+                }),
+              ]);
+            }
+            return result;
+          } catch (err) {
+            throw new Error(
+              `Invalid evaluate function: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+            );
           }
-          return result;
-        } catch (err) {
-          throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
-        }
-        `,
-      ) as (el: Element, args: { fnBody: string; timeoutMs: number }) => unknown;
-      const evalPromise = locator.evaluate(elementEvaluator, {
-        fnBody: fnText,
-        timeoutMs: evaluateTimeout,
-      });
+        },
+        {
+          fnBody: fnText,
+          timeoutMs: evaluateTimeout,
+        },
+      );
       if (!abortPromise) {
         return await evalPromise;
       }
@@ -324,33 +325,35 @@ export async function evaluateViaPlaywright(opts: {
       }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
-    const browserEvaluator = new Function(
-      "args",
-      `
-        "use strict";
-        var fnBody = args.fnBody, timeoutMs = args.timeoutMs;
+    const evalPromise = page.evaluate(
+      (args) => {
+        const { fnBody, timeoutMs } = args;
         try {
-          var candidate = eval("(" + fnBody + ")");
-          var result = typeof candidate === "function" ? candidate() : candidate;
+          // eslint-disable-next-line @typescript-eslint/no-implied-eval
+          const candidate = new Function(`return (${fnBody})`)();
+          const result = typeof candidate === "function" ? candidate() : candidate;
           if (result && typeof result.then === "function") {
             return Promise.race([
               result,
-              new Promise(function(_, reject) {
-                setTimeout(function() { reject(new Error("evaluate timed out after " + timeoutMs + "ms")); }, timeoutMs);
-              })
+              new Promise((_, reject) => {
+                setTimeout(() => {
+                  reject(new Error(`evaluate timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+              }),
             ]);
           }
           return result;
         } catch (err) {
-          throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
+          throw new Error(
+            `Invalid evaluate function: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+          );
         }
-      `,
-    ) as (args: { fnBody: string; timeoutMs: number }) => unknown;
-    const evalPromise = page.evaluate(browserEvaluator, {
-      fnBody: fnText,
-      timeoutMs: evaluateTimeout,
-    });
+      },
+      {
+        fnBody: fnText,
+        timeoutMs: evaluateTimeout,
+      },
+    );
     if (!abortPromise) {
       return await evalPromise;
     }
