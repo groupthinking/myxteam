@@ -17,8 +17,7 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
-        if: ${{ secrets.GH_APP_PRIVATE_KEY }}
-        continue-on-error: true
+        if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -46,7 +45,7 @@ jobs:
               });
               isMaintainer = membership?.data?.state === "active";
             } catch (error) {
-              if (error?.status !== 404 && error?.status !== 403) {
+              if (error?.status !== 404) {
                 throw error;
               }
             }
@@ -68,8 +67,7 @@ jobs:
     steps:
       - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app-token
-        if: ${{ secrets.GH_APP_PRIVATE_KEY }}
-        continue-on-error: true
+        if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -92,7 +90,7 @@ jobs:
               });
               isMaintainer = membership?.data?.state === "active";
             } catch (error) {
-              if (error?.status !== 404 && error?.status !== 403) {
+              if (error?.status !== 404) {
                 throw error;
               }
             }
