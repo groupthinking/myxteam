@@ -4,7 +4,7 @@ const generateUsers = (count: number): SlackUserLookup[] => {
   const users: SlackUserLookup[] = [];
   for (let i = 0; i < count; i++) {
     users.push({
-      id: `U${i.toString().padStart(8, '0')}`,
+      id: `U${i.toString().padStart(8, "0")}`,
       name: `user${i}`,
       displayName: `Display Name ${i}`,
       realName: `Real Name ${i}`,
@@ -20,14 +20,16 @@ const generateUsers = (count: number): SlackUserLookup[] => {
 const userCount = 1000;
 const entriesCount = 500;
 const users = generateUsers(userCount);
-const entries = users.slice(0, entriesCount).map(u => u.id);
+const entries = users.slice(0, entriesCount).map((u) => u.id);
 
 const mockClient = {
   users: {
     list: async ({ cursor }: { cursor?: string }) => {
-      if (cursor) return { members: [], response_metadata: {} };
+      if (cursor) {
+        return { members: [], response_metadata: {} };
+      }
       return {
-        members: users.map(u => ({
+        members: users.map((u) => ({
           id: u.id,
           name: u.name,
           deleted: u.deleted,

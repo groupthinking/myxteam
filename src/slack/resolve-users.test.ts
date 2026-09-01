@@ -36,13 +36,13 @@ describe("resolveSlackUserAllowlist", () => {
       isAppUser: false,
     },
     {
-        id: "U4",
-        name: "alice.archived",
-        displayName: "Alice",
-        deleted: true,
-        isBot: false,
-        isAppUser: false,
-    }
+      id: "U4",
+      name: "alice.archived",
+      displayName: "Alice",
+      deleted: true,
+      isBot: false,
+      isAppUser: false,
+    },
   ];
 
   const mockClient = {
@@ -81,7 +81,7 @@ describe("resolveSlackUserAllowlist", () => {
             is_bot: false,
             is_app_user: false,
             profile: { display_name: "Alice" },
-          }
+          },
         ],
       }),
     },

@@ -304,6 +304,7 @@ export async function evaluateViaPlaywright(opts: {
           } catch (err) {
             throw new Error(
               `Invalid evaluate function: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+              { cause: err },
             );
           }
         },
@@ -346,6 +347,7 @@ export async function evaluateViaPlaywright(opts: {
         } catch (err) {
           throw new Error(
             `Invalid evaluate function: ${err && (err as Error).message ? (err as Error).message : String(err)}`,
+            { cause: err },
           );
         }
       },
